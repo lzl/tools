@@ -10,6 +10,7 @@ wheels/
 .venv
 
 .DS_Store
+cookies.txt
 
 input_dir/
 output_dir/
