@@ -11,4 +11,5 @@ wheels/
 
 .DS_Store
 
-downloads/
+input_dir/
+output_dir/

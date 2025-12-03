@@ -21,7 +21,7 @@ def main():
         sys.exit(1)
     
     video_url = sys.argv[1]
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("downloads")
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output_dir")
     
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)

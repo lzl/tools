@@ -76,10 +76,10 @@ def main():
     # Parse arguments
     input_file = None
     speed_factor = 2.0
-    output_dir = Path("output")
+    output_dir = Path("output_dir")
     
     # Usage: speed_up_audio [file] [speed_factor] [output_dir]
-    # If file is not provided, use latest file from downloads/
+    # If file is not provided, use latest file from input_dir/
     # If speed_factor is not provided, default to 2.0
     
     if len(sys.argv) > 1:
@@ -89,7 +89,7 @@ def main():
             speed_factor = float(arg1)
             if speed_factor <= 0:
                 raise ValueError("Speed factor must be positive")
-            # First arg is speed factor, file will be from downloads
+            # First arg is speed factor, file will be from input_dir
         except ValueError:
             # Not a number, treat as file path
             input_file = Path(arg1)
@@ -109,8 +109,8 @@ def main():
                 print(f"Error: Invalid speed factor '{arg2}'. Must be a positive number.")
                 print("\nUsage: speed_up_audio [file] [speed_factor] [output_dir]")
                 print("\nExamples:")
-                print("  speed_up_audio                                    # Use latest from downloads/, 2x speed")
-                print("  speed_up_audio 1.5                                 # Use latest from downloads/, 1.5x speed")
+                print("  speed_up_audio                                    # Use latest from input_dir/, 2x speed")
+                print("  speed_up_audio 1.5                                 # Use latest from input_dir/, 1.5x speed")
                 print("  speed_up_audio audio.mp3                           # Use audio.mp3, 2x speed")
                 print("  speed_up_audio audio.mp3 1.5                       # Use audio.mp3, 1.5x speed")
                 print("  speed_up_audio audio.mp3 1.5 ./custom_output       # Custom output directory")
@@ -121,12 +121,12 @@ def main():
     
     # Determine input file
     if input_file is None:
-        downloads_dir = Path("downloads")
-        if not downloads_dir.exists():
-            print(f"Error: Downloads directory '{downloads_dir}' does not exist")
+        input_dir = Path("input_dir")
+        if not input_dir.exists():
+            print(f"Error: Input directory '{input_dir}' does not exist")
             sys.exit(1)
         try:
-            input_file = find_latest_audio_file(downloads_dir)
+            input_file = find_latest_audio_file(input_dir)
             print(f"Using latest audio file: {input_file}")
         except FileNotFoundError as e:
             print(f"Error: {e}")
