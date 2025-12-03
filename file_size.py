@@ -1,3 +1,7 @@
+# /// script
+# dependencies = []
+# ///
+
 """A simple file size statistics tool"""
 
 import sys

@@ -4,19 +4,13 @@ A collection of utility tools. Each Python file is an independent tool that can 
 
 ## Usage
 
-### Method 1: Via Script Entry Point (Recommended)
-
-After configuring script entry points in `pyproject.toml`, you can call tools directly:
+Run tools directly using `uv run` with the Python file:
 
 ```bash
-uv run file-size <file_or_directory_path>
+uv run file_size.py <file_or_directory_path>
 ```
 
-### Method 2: Run Python File Directly
-
-```bash
-uv run python file_size.py <file_or_directory_path>
-```
+Each tool uses PEP 723 inline script metadata to declare dependencies, making them self-contained and independent.
 
 ## Available Tools
 
@@ -27,21 +21,25 @@ Calculate the size of a file or directory.
 **Examples:**
 ```bash
 # Calculate file size
-uv run file-size README.md
+uv run file_size.py README.md
 
 # Calculate directory size
-uv run file-size .
+uv run file_size.py .
 ```
 
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
-2. Implement a `main()` function in the file
-3. Add an entry point in `pyproject.toml` under `[project.scripts]`:
-   ```toml
-   [project.scripts]
-   my-tool = "my_tool:main"
+2. Add PEP 723 inline script metadata at the top of the file:
+   ```python
+   # /// script
+   # dependencies = []
+   # ///
    ```
+3. Implement a `main()` function in the file
+4. If your tool has dependencies, use `uv add --script my_tool.py <dependency>` to add them
+
+The script metadata makes each tool self-contained and independent.
 
 ## Design Principles
 
