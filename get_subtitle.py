@@ -12,7 +12,22 @@ import tempfile
 import shutil
 import re
 import hashlib
+import time
 from pathlib import Path
+
+
+def retry_step(func, *args, max_retries=2, delay=5, step_name="step", **kwargs):
+    """Retry a step with exponential backoff"""
+    for attempt in range(max_retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"\n⚠ {step_name} failed (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                print(f"  Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def get_safe_filename_from_url(video_url, extension=".mp3"):
@@ -277,13 +292,35 @@ def main():
             return
         
         # Step 2: No subtitle available, download audio
-        audio_file = download_audio(video_url, temp_dir, cookies_file)
+        audio_file = retry_step(
+            download_audio,
+            video_url,
+            temp_dir,
+            cookies_file,
+            max_retries=2,
+            delay=5,
+            step_name="Downloading audio"
+        )
         
         # Step 3 & 4: Check duration and speed up if needed
-        final_audio = speed_up_audio_if_needed(audio_file, temp_dir)
+        final_audio = retry_step(
+            speed_up_audio_if_needed,
+            audio_file,
+            temp_dir,
+            max_retries=2,
+            delay=5,
+            step_name="Speeding up audio"
+        )
         
         # Step 5: Transcribe audio to VTT
-        vtt_file = transcribe_audio(final_audio, output_dir)
+        vtt_file = retry_step(
+            transcribe_audio,
+            final_audio,
+            output_dir,
+            max_retries=2,
+            delay=5,
+            step_name="Transcribing audio"
+        )
         
         print(f"\n✓ Success! Subtitle saved to: {vtt_file.absolute()}")
         

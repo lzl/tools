@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors
 
 
 def find_latest_audio_file(directory: Path) -> Path:
@@ -39,6 +40,27 @@ def format_time(seconds: float) -> str:
     secs = int(seconds % 60)
     millis = int((seconds % 1) * 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+def is_retryable_error(e: Exception) -> bool:
+    """Check if an error is retryable (transient HTTP errors)"""
+    # Check for ServerError with retryable status codes
+    if isinstance(e, errors.ServerError):
+        retryable_status_codes = {429, 500, 502, 503, 504}
+        # ServerError has status_code attribute
+        if hasattr(e, 'status_code') and e.status_code in retryable_status_codes:
+            return True
+        # Also check error message for 503 UNAVAILABLE
+        error_str = str(e).upper()
+        if '503' in error_str or 'UNAVAILABLE' in error_str or 'OVERLOADED' in error_str:
+            return True
+    
+    # Check for other transient errors
+    error_str = str(e).upper()
+    if any(keyword in error_str for keyword in ['503', 'UNAVAILABLE', 'OVERLOADED', 'RATE LIMIT', 'TIMEOUT']):
+        return True
+    
+    return False
 
 
 def transcribe_audio_with_gemini(audio_path: Path, api_key: str, output_dir: Path) -> Path:
@@ -86,40 +108,65 @@ Please provide accurate timestamps and break the transcription into readable seg
 Make sure the timestamps are accurate and the text matches the audio content.
 """
     
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-lite-preview-09-2025',
-            contents=[prompt, audio_file],
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=4096  # Enable reasoning mode for better transcription accuracy
+    # Retry logic for API calls with exponential backoff
+    max_retries = 3
+    retry_delays = [10, 30]  # seconds between retries
+    
+    response = None
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash-lite-preview-09-2025',
+                contents=[prompt, audio_file],
+                config=types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(
+                        thinking_budget=4096  # Enable reasoning mode for better transcription accuracy
+                    )
                 )
             )
-        )
-        
-        transcript = response.text
-        
-        # Generate output filename
-        output_filename = f"{audio_path.stem}.vtt"
-        output_path = output_dir / output_filename
-        
-        # Save transcript to file
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(transcript)
-        
-        # Clean up uploaded file
-        print("Cleaning up uploaded file...")
-        client.files.delete(name=audio_file.name)
-        
-        return output_path
-        
-    except Exception as e:
-        # Clean up uploaded file on error
+            break  # Success, exit retry loop
+            
+        except Exception as e:
+            last_error = e
+            # Check if we should retry
+            if attempt < max_retries - 1 and is_retryable_error(e):
+                delay = retry_delays[attempt] if attempt < len(retry_delays) else retry_delays[-1]
+                print(f"\n⚠ Attempt {attempt + 1} failed: {e}")
+                print(f"  Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                # Not retryable or out of retries, clean up and raise
+                try:
+                    client.files.delete(name=audio_file.name)
+                except:
+                    pass
+                raise e
+    
+    if response is None:
+        # Should not happen, but handle gracefully
         try:
             client.files.delete(name=audio_file.name)
         except:
             pass
-        raise e
+        raise RuntimeError(f"Failed to transcribe after {max_retries} attempts: {last_error}")
+    
+    transcript = response.text
+    
+    # Generate output filename
+    output_filename = f"{audio_path.stem}.vtt"
+    output_path = output_dir / output_filename
+    
+    # Save transcript to file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(transcript)
+    
+    # Clean up uploaded file
+    print("Cleaning up uploaded file...")
+    client.files.delete(name=audio_file.name)
+    
+    return output_path
 
 
 def main():
