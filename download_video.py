@@ -29,6 +29,11 @@ def main():
     print(f"Downloading video from: {video_url}")
     print(f"Output directory: {output_dir.absolute()}")
     
+    # Check for cookies.txt file in current directory
+    cookies_file = Path("cookies.txt")
+    if cookies_file.exists():
+        print(f"Using cookies file: {cookies_file.absolute()}")
+    
     try:
         # Build yt-dlp command
         cmd = [
@@ -38,6 +43,10 @@ def main():
             "--no-mtime",  # Don't set file modification time
             "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
         ]
+        
+        # Add cookies file if it exists
+        if cookies_file.exists():
+            cmd.extend(["--cookies", str(cookies_file)])
         
         # Run yt-dlp
         result = subprocess.run(cmd, check=True, capture_output=False)
