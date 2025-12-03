@@ -1,6 +1,6 @@
 # /// script
 # dependencies = [
-#   "google-generativeai",
+#   "google-genai",
 #   "python-dotenv",
 # ]
 # ///
@@ -12,7 +12,8 @@ import os
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 def find_latest_audio_file(directory: Path) -> Path:
@@ -42,11 +43,8 @@ def format_time(seconds: float) -> str:
 
 def transcribe_audio_with_gemini(audio_path: Path, api_key: str, output_dir: Path) -> Path:
     """Transcribe audio file using Google Gemini AI"""
-    # Configure Gemini API
-    genai.configure(api_key=api_key)
-    
-    # Load the model
-    model = genai.GenerativeModel(model_name='gemini-2.5-flash-lite-preview-09-2025')
+    # Initialize Gemini client with API key
+    client = genai.Client(api_key=api_key)
     
     print(f"Loading audio file: {audio_path}")
     file_size_mb = audio_path.stat().st_size / (1024 * 1024)
@@ -54,18 +52,18 @@ def transcribe_audio_with_gemini(audio_path: Path, api_key: str, output_dir: Pat
     
     # Upload audio file to Gemini
     print("\nUploading audio to Gemini API...")
-    audio_file = genai.upload_file(path=str(audio_path))
+    audio_file = client.files.upload(file=str(audio_path))
     
     print("Waiting for file to be processed...")
     # Wait for the file to be processed
     while audio_file.state.name == "PROCESSING":
         print(".", end="", flush=True)
         time.sleep(2)
-        audio_file = genai.get_file(audio_file.name)
+        audio_file = client.files.get(name=audio_file.name)
     print()
     
     if audio_file.state.name == "FAILED":
-        genai.delete_file(audio_file.name)
+        client.files.delete(name=audio_file.name)
         raise RuntimeError("Failed to process audio file")
     
     print("Transcribing audio (this may take a while)...")
@@ -89,8 +87,14 @@ Make sure the timestamps are accurate and the text matches the audio content.
 """
     
     try:
-        response = model.generate_content(
-            contents=[audio_file, prompt]
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-lite-preview-09-2025',
+            contents=[prompt, audio_file],
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=4096  # Enable reasoning mode for better transcription accuracy
+                )
+            )
         )
         
         transcript = response.text
@@ -105,14 +109,14 @@ Make sure the timestamps are accurate and the text matches the audio content.
         
         # Clean up uploaded file
         print("Cleaning up uploaded file...")
-        genai.delete_file(audio_file.name)
+        client.files.delete(name=audio_file.name)
         
         return output_path
         
     except Exception as e:
         # Clean up uploaded file on error
         try:
-            genai.delete_file(audio_file.name)
+            client.files.delete(name=audio_file.name)
         except:
             pass
         raise e
