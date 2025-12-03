@@ -17,11 +17,11 @@ def main():
         print("Usage: download_video <video_url> [output_directory]")
         print("\nExample:")
         print("  download_video https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        print("  download_video https://www.youtube.com/watch?v=dQw4w9WgXcQ ./downloads")
+        print("  download_video https://www.youtube.com/watch?v=dQw4w9WgXcQ ./custom_dir")
         sys.exit(1)
     
     video_url = sys.argv[1]
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd()
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("downloads")
     
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +36,7 @@ def main():
             video_url,
             "-o", str(output_dir / "%(title)s.%(ext)s"),
             "--no-mtime",  # Don't set file modification time
+            "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
         ]
         
         # Run yt-dlp
