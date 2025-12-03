@@ -1,0 +1,22 @@
+---
+description: Design principles for tools in this project
+alwaysApply: true
+---
+
+# Tool Design Principles
+
+## Tool Design
+- **Single Responsibility Principle**: Each tool focuses on one thing only, with decoupled functionality
+- Each Python file is an independent tool
+- Each tool should have a `main()` function as the entry point
+- Tools should not have dependencies on each other, maintaining independence
+
+## Project Structure
+- Each tool is an independent `.py` file
+- Configure script entry points in `pyproject.toml` under `[project.scripts]`
+- Call via `uv run <script-name>` or `uv run python <file>.py`
+
+## Code Standards
+- Use standard command-line argument processing (`sys.argv`)
+- Provide clear error messages and usage instructions
+- Keep code simple and readable
