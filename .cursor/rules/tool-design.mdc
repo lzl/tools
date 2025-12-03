@@ -13,10 +13,21 @@ alwaysApply: true
 
 ## Project Structure
 - Each tool is an independent `.py` file
-- Configure script entry points in `pyproject.toml` under `[project.scripts]`
-- Call via `uv run <script-name>` or `uv run python <file>.py`
+- Use PEP 723 inline script metadata at the top of each script file:
+  ```python
+  # /// script
+  # dependencies = []
+  # ///
+  ```
+- Call via `uv run <file>.py` (e.g., `uv run file_size.py`)
+- Scripts are self-contained and don't require project installation
 
 ## Code Standards
 - Use standard command-line argument processing (`sys.argv`)
 - Provide clear error messages and usage instructions
 - Keep code simple and readable
+
+## Adding Dependencies
+- Use `uv add --script <file>.py <dependency>` to add dependencies to a script
+- Dependencies will be automatically added to the inline script metadata
+- Example: `uv add --script file_size.py requests`
