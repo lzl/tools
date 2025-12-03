@@ -1,6 +1,7 @@
 # /// script
 # dependencies = [
 #   "google-generativeai",
+#   "python-dotenv",
 # ]
 # ///
 
@@ -10,6 +11,7 @@ import sys
 import os
 import time
 from pathlib import Path
+from dotenv import load_dotenv
 import google.generativeai as genai
 
 
@@ -118,6 +120,9 @@ Make sure the timestamps are accurate and the text matches the audio content.
 
 def main():
     """Transcribe audio file to text using Google Gemini AI"""
+    # Load environment variables from .env file
+    load_dotenv()
+    
     # Parse arguments
     input_file = None
     output_dir = Path("output_dir")
@@ -151,12 +156,13 @@ def main():
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get API key from environment variable
+    # Get API key from environment variable (loaded from .env file)
     api_key = os.getenv('GEMINI_API_KEY')
     if not api_key:
         print("Error: GEMINI_API_KEY environment variable is not set")
         print("\nPlease set your Google Gemini API key:")
-        print("  export GEMINI_API_KEY='your-api-key-here'")
+        print("  Option 1: Create a .env file with: GEMINI_API_KEY='your-api-key-here'")
+        print("  Option 2: Export environment variable: export GEMINI_API_KEY='your-api-key-here'")
         print("\nYou can get an API key from: https://aistudio.google.com/")
         sys.exit(1)
     
