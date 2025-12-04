@@ -39,8 +39,7 @@ def main():
         cmd = [
             "yt-dlp",
             video_url,
-            "-x",  # Extract audio
-            "--audio-format", "mp3",  # Convert to MP3
+            "-f", "worstaudio",  # Select worst audio quality (smallest file size)
             "-o", str(output_dir / "%(title)s.%(ext)s"),
             "--no-mtime",  # Don't set file modification time
             "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
