@@ -10,6 +10,8 @@
 import sys
 import os
 import time
+import shutil
+import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -42,6 +44,31 @@ def format_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+def is_ascii_safe(filename: str) -> bool:
+    """Check if filename contains only ASCII characters"""
+    try:
+        filename.encode('ascii')
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def create_ascii_safe_temp_file(source_path: Path) -> Path:
+    """Create a temporary file with ASCII-safe filename from source file"""
+    # Generate ASCII-safe filename: use stem hash + extension
+    import hashlib
+    stem_hash = hashlib.md5(str(source_path.stem).encode('utf-8')).hexdigest()[:8]
+    safe_filename = f"audio_{stem_hash}{source_path.suffix}"
+    
+    # Create temporary file in same directory as source (to preserve permissions)
+    temp_path = source_path.parent / safe_filename
+    
+    # Copy source file to temporary file
+    shutil.copy2(source_path, temp_path)
+    
+    return temp_path
+
+
 def is_retryable_error(e: Exception) -> bool:
     """Check if an error is retryable (transient HTTP errors)"""
     # Check for ServerError with retryable status codes
@@ -72,9 +99,25 @@ def transcribe_audio_with_gemini(audio_path: Path, api_key: str, output_dir: Pat
     file_size_mb = audio_path.stat().st_size / (1024 * 1024)
     print(f"File size: {file_size_mb:.2f} MB")
     
+    # Check if filename is ASCII-safe, create temp file if not
+    temp_file = None
+    upload_path = audio_path
+    
+    if not is_ascii_safe(str(audio_path.name)):
+        print(f"Filename contains non-ASCII characters, creating temporary file with ASCII-safe name...")
+        temp_file = create_ascii_safe_temp_file(audio_path)
+        upload_path = temp_file
+        print(f"Using temporary file: {temp_file.name}")
+    
     # Upload audio file to Gemini
     print("\nUploading audio to Gemini API...")
-    audio_file = client.files.upload(file=str(audio_path))
+    try:
+        audio_file = client.files.upload(file=str(upload_path))
+    finally:
+        # Clean up temporary file if it was created
+        if temp_file is not None and temp_file.exists():
+            temp_file.unlink()
+            print(f"Cleaned up temporary file")
     
     print("Waiting for file to be processed...")
     # Wait for the file to be processed
