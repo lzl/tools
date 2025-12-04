@@ -228,7 +228,58 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
         return audio_path
 
 
-def transcribe_audio(audio_path, output_dir):
+def add_video_url_to_vtt(vtt_path, video_url):
+    """Add video URL as a comment in the VTT file header"""
+    if not vtt_path.exists():
+        return
+    
+    # Read the existing VTT file
+    with open(vtt_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Check if URL already exists in the file
+    if video_url in content:
+        return
+    
+    # Split into lines
+    lines = content.split('\n')
+    new_lines = []
+    
+    # Process VTT file header
+    if lines and lines[0].strip() == 'WEBVTT':
+        new_lines.append('WEBVTT')
+        idx = 1
+        
+        # Add metadata lines (Kind, Language, etc.) if they exist
+        while idx < len(lines) and lines[idx].strip() and ':' in lines[idx]:
+            new_lines.append(lines[idx])
+            idx += 1
+        
+        # Add video URL as a NOTE comment in the header section
+        new_lines.append(f'NOTE Video URL: {video_url}')
+        
+        # Add empty line if not already present
+        if idx < len(lines) and lines[idx].strip() == '':
+            new_lines.append('')
+            idx += 1
+        else:
+            new_lines.append('')
+        
+        # Add the rest of the lines (subtitle content)
+        new_lines.extend(lines[idx:])
+    else:
+        # If format is unexpected, prepend the URL comment
+        new_lines.append('WEBVTT')
+        new_lines.append(f'NOTE Video URL: {video_url}')
+        new_lines.append('')
+        new_lines.extend(lines)
+    
+    # Write back to file
+    with open(vtt_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(new_lines))
+
+
+def transcribe_audio(audio_path, output_dir, video_url=None):
     """Transcribe audio to VTT using transcribe_audio.py tool"""
     print(f"\n=== Step 5: Transcribing audio ===")
     
@@ -247,6 +298,10 @@ def transcribe_audio(audio_path, output_dir):
         # Find the generated VTT file
         expected_vtt = output_dir / f"{audio_path.stem}.vtt"
         if expected_vtt.exists():
+            # Add video URL to the VTT file if provided
+            if video_url:
+                add_video_url_to_vtt(expected_vtt, video_url)
+                print(f"✓ Video URL added to subtitle file")
             print(f"✓ Transcription completed: {expected_vtt.name}")
             return expected_vtt
         else:
@@ -288,6 +343,8 @@ def main():
         subtitle_file = download_subtitle_direct(video_url, output_dir, cookies_file)
         
         if subtitle_file:
+            # Add video URL to the downloaded subtitle file
+            add_video_url_to_vtt(subtitle_file, video_url)
             print(f"\n✓ Success! Subtitle saved to: {subtitle_file.absolute()}")
             return
         
@@ -317,6 +374,7 @@ def main():
             transcribe_audio,
             final_audio,
             output_dir,
+            video_url,
             max_retries=2,
             delay=5,
             step_name="Transcribing audio"
