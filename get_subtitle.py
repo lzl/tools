@@ -224,6 +224,7 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
             print(f"Warning: Failed to speed up audio (exit code {e.returncode}), using original")
             return audio_path
     else:
+        print(f"\n=== Step 4: Speeding up audio ===")
         print("Audio is less than 1 hour, skipping speed-up")
         return audio_path
 
