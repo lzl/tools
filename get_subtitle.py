@@ -151,7 +151,7 @@ def download_audio(video_url, temp_dir, cookies_file=None):
         subprocess.run(cmd, check=True, capture_output=False)
         
         # Find the downloaded audio file
-        audio_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus'}
+        audio_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm'}
         audio_files = [
             f for f in temp_dir.iterdir()
             if f.is_file() and f.suffix.lower() in audio_extensions
@@ -193,7 +193,7 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
     print(f"Audio duration: {duration_hours:.2f} hours ({duration:.0f} seconds)")
     
     if duration > 3600:  # More than 1 hour
-        print(f"\n=== Step 4: Speeding up audio (2x) ===")
+        print(f"\n=== Step 4: Speeding up audio (1.5x) ===")
         
         # Get the script directory to find speed_up_audio.py
         script_dir = Path(__file__).parent
@@ -202,7 +202,7 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
         if not speed_up_script.exists():
             raise FileNotFoundError(f"speed_up_audio.py not found at {speed_up_script}")
         
-        cmd = ["uv", "run", str(speed_up_script), str(audio_path), "2.0", str(temp_dir)]
+        cmd = ["uv", "run", str(speed_up_script), str(audio_path), "1.5", str(temp_dir)]
         
         try:
             subprocess.run(cmd, check=True, capture_output=False)
@@ -210,7 +210,7 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
             # Find the sped-up audio file
             stem = audio_path.stem
             suffix = audio_path.suffix
-            sped_up_filename = f"{stem}_speed_2.0x{suffix}"
+            sped_up_filename = f"{stem}_speed_1.5x{suffix}"
             sped_up_path = temp_dir / sped_up_filename
             
             if sped_up_path.exists():
@@ -226,6 +226,48 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
     else:
         print(f"\n=== Step 4: Speeding up audio ===")
         print("Audio is less than 1 hour, skipping speed-up")
+        return audio_path
+
+
+def convert_to_mp3_if_needed(audio_path, temp_dir):
+    """Convert audio to MP3 by delegating to convert_to_mp3.py"""
+    print(f"\n=== Step 5: Converting audio format ===")
+    
+    if audio_path.suffix.lower() == '.mp3':
+        print("Audio is already in MP3 format, skipping conversion")
+        return audio_path
+    
+    script_dir = Path(__file__).parent
+    convert_script = script_dir / "convert_to_mp3.py"
+    
+    if not convert_script.exists():
+        raise FileNotFoundError(f"convert_to_mp3.py not found at {convert_script}")
+    
+    mp3_path = temp_dir / f"{audio_path.stem}.mp3"
+    
+    # Avoid interactive overwrite prompt in convert_to_mp3.py
+    if mp3_path.exists():
+        mp3_path.unlink()
+    
+    cmd = ["uv", "run", str(convert_script), str(audio_path), str(temp_dir)]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=False)
+        
+        if mp3_path.exists():
+            print(f"✓ Audio converted to MP3: {mp3_path.name}")
+            return mp3_path
+        
+        print("Warning: Converted MP3 file not found, using original")
+        return audio_path
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to convert to MP3 (exit code {e.returncode})")
+        print("Using original file format")
+        return audio_path
+    except Exception as e:
+        print(f"Warning: Error during conversion: {e}")
+        print("Using original file format")
         return audio_path
 
 
@@ -282,7 +324,7 @@ def add_video_url_to_vtt(vtt_path, video_url):
 
 def transcribe_audio(audio_path, output_dir, video_url=None):
     """Transcribe audio to VTT using transcribe_audio.py tool"""
-    print(f"\n=== Step 5: Transcribing audio ===")
+    print(f"\n=== Step 6: Transcribing audio ===")
     
     # Get the script directory to find transcribe_audio.py
     script_dir = Path(__file__).parent
@@ -370,10 +412,20 @@ def main():
             step_name="Speeding up audio"
         )
         
-        # Step 5: Transcribe audio to VTT
+        # Step 5: Convert to MP3 if needed (e.g., webm format)
+        mp3_audio = retry_step(
+            convert_to_mp3_if_needed,
+            final_audio,
+            temp_dir,
+            max_retries=2,
+            delay=5,
+            step_name="Converting audio format"
+        )
+        
+        # Step 6: Transcribe audio to VTT
         vtt_file = retry_step(
             transcribe_audio,
-            final_audio,
+            mp3_audio,
             output_dir,
             video_url,
             max_retries=2,
