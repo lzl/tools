@@ -85,7 +85,7 @@ def download_subtitle_direct(video_url, output_dir, cookies_file=None):
         "--write-subs",  # Download subtitles
         "--write-auto-subs",  # Download auto-generated subtitles
         "--skip-download",  # Skip downloading video/audio
-        "--sub-langs", "en,en-US,en-GB,en-CA,en-AU",  # Auto-select English variants
+        "--sub-langs", "zh,en,en-US",  # Auto-select English variants
         "-o", str(output_dir / "%(title)s.%(ext)s"),
         "--no-mtime",
         "--remote-components", "ejs:github",
