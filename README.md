@@ -141,7 +141,7 @@ Transcribe audio files to WebVTT subtitles using Groq's Whisper API (`whisper-la
 - Auto-selects latest audio file from `input_dir/` if no file specified
 - Supports: mp3, wav, m4a, flac, ogg, webm (max 25MB)
 
-**Examples:**
+**Examples (Python):**
 ```bash
 # Transcribe a specific audio file
 uv run transcribe_audio_groq.py audio.mp3
@@ -151,6 +151,18 @@ uv run transcribe_audio_groq.py audio.mp3 ./subtitles
 
 # Auto-select latest audio from input_dir/
 uv run transcribe_audio_groq.py
+```
+
+**Examples (Rust):**
+```bash
+# Transcribe a specific audio file
+cargo +nightly -Zscript transcribe_audio_groq.rs audio.mp3
+
+# Transcribe with custom output directory
+cargo +nightly -Zscript transcribe_audio_groq.rs audio.mp3 ./subtitles
+
+# Auto-select latest audio from input_dir/
+cargo +nightly -Zscript transcribe_audio_groq.rs
 ```
 
 **Environment Variables:**
