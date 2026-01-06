@@ -187,6 +187,64 @@ def infer_title_from_html(html_content: bytes, fallback: str) -> str:
     return fallback
 
 
+def normalize_href(href: str) -> str:
+    """Normalize href by removing fragment."""
+    return href.split("#")[0] if "#" in href else href
+
+
+def get_spine_range_for_toc_entry(
+    toc_entries: List[Tuple[str, str, int]],
+    entry_idx: int,
+    spine_order: List[str],
+    href_to_item: Dict[str, epub.EpubItem],
+) -> Tuple[int, int]:
+    """
+    Get the spine index range [start, end) for a TOC entry.
+    For parent entries, include all spine files until the next sibling or parent entry.
+    """
+    title, href, depth = toc_entries[entry_idx]
+    file_href = normalize_href(href)
+    
+    # Resolve file_href to actual item name
+    if file_href not in href_to_item:
+        for key in href_to_item:
+            if key.endswith(file_href) or file_href.endswith(key):
+                file_href = key
+                break
+    
+    # Find start position in spine
+    start_idx = -1
+    for i, spine_href in enumerate(spine_order):
+        if spine_href == file_href or spine_href.endswith(file_href) or file_href.endswith(spine_href):
+            start_idx = i
+            break
+    
+    if start_idx == -1:
+        return -1, -1
+    
+    # Find end position: next TOC entry at same or shallower depth
+    end_idx = len(spine_order)
+    for next_entry_idx in range(entry_idx + 1, len(toc_entries)):
+        next_title, next_href, next_depth = toc_entries[next_entry_idx]
+        if next_depth <= depth:
+            # Found next sibling or parent - stop here
+            next_file_href = normalize_href(next_href)
+            # Resolve next_file_href
+            if next_file_href not in href_to_item:
+                for key in href_to_item:
+                    if key.endswith(next_file_href) or next_file_href.endswith(key):
+                        next_file_href = key
+                        break
+            # Find this file in spine
+            for i, spine_href in enumerate(spine_order):
+                if spine_href == next_file_href or spine_href.endswith(next_file_href) or next_file_href.endswith(spine_href):
+                    end_idx = i
+                    break
+            break
+    
+    return start_idx, end_idx
+
+
 def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 10) -> List[Chapter]:
     """Extract chapters from EPUB. Priority: TOC (depth <= max_toc_depth) -> spine fallback."""
     book = epub.read_epub(str(epub_path))
@@ -212,20 +270,21 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 10) -> List[Cha
         
         if toc_entries:
             seen_hrefs: Set[str] = set()
-            for idx, (title, href, _depth) in enumerate(toc_entries, start=1):
+            for entry_idx, (title, href, depth) in enumerate(toc_entries):
                 if "#" in href:
                     file_href, fragment = href.split("#", 1)
                 else:
                     file_href, fragment = href, None
                 
-                item = href_to_item.get(file_href)
-                if item is None:
+                # Resolve file_href
+                orig_file_href = file_href
+                if file_href not in href_to_item:
                     for key in href_to_item:
                         if key.endswith(file_href) or file_href.endswith(key):
-                            item = href_to_item[key]
                             file_href = key
                             break
                 
+                item = href_to_item.get(file_href)
                 if item is None:
                     continue
                 
@@ -234,17 +293,27 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 10) -> List[Cha
                     continue
                 seen_hrefs.add(full_href)
                 
-                text = extract_text_from_html(item.get_content(), fragment)
+                # Get spine range for this TOC entry
+                start_idx, end_idx = get_spine_range_for_toc_entry(
+                    toc_entries, entry_idx, spine_order, href_to_item
+                )
                 
-                if not text and file_href in spine_order:
-                    spine_idx = spine_order.index(file_href)
-                    if spine_idx + 1 < len(spine_order):
-                        next_href = spine_order[spine_idx + 1]
-                        next_item = href_to_item.get(next_href)
-                        if next_item:
-                            text = extract_text_from_html(next_item.get_content())
-                            if text:
-                                full_href = next_href
+                if start_idx == -1:
+                    # Fallback: just extract from the single file
+                    text = extract_text_from_html(item.get_content(), fragment)
+                else:
+                    # Collect text from all spine files in range
+                    text_parts = []
+                    for spine_idx in range(start_idx, end_idx):
+                        spine_href = spine_order[spine_idx]
+                        spine_item = href_to_item.get(spine_href)
+                        if spine_item:
+                            # For the first file, respect the fragment anchor
+                            frag = fragment if spine_idx == start_idx else None
+                            part_text = extract_text_from_html(spine_item.get_content(), frag)
+                            if part_text:
+                                text_parts.append(part_text)
+                    text = "\n\n".join(text_parts)
                 
                 if text:
                     chapters.append(Chapter(
