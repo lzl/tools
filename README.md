@@ -27,6 +27,38 @@ uv run file_size.py README.md
 uv run file_size.py .
 ```
 
+### epub-vocab-html
+
+Extract unknown words and phrases from an English EPUB and generate an HTML study page with translations.
+
+**Features:**
+- Supports chapter selection (TOC-based, with spine fallback)
+- Vocabulary filtering: Zipf frequency, known words list, minimum count
+- Phrase extraction: phrasal verbs, fixed expressions, n-grams
+- Translation via Gemini API (with SQLite caching)
+- Bilingual output: English term/sentence + Chinese translation
+
+**Examples:**
+```bash
+# List chapters in an EPUB
+uv run epub_vocab_html.py --list book.epub
+
+# Process specific chapters
+uv run epub_vocab_html.py book.epub --chapters 1,3-5 --out output_dir/vocab.html
+
+# Process all chapters
+uv run epub_vocab_html.py book.epub --chapters all
+
+# Use a known words list to filter out words you already know
+uv run epub_vocab_html.py book.epub --chapters 1 --known-words known_words.txt
+
+# Adjust word filtering
+uv run epub_vocab_html.py book.epub --chapters 1 --zipf-max 5.0 --min-count 2
+```
+
+**Environment Variables:**
+- `GEMINI_API_KEY`: Required for translation (get from https://aistudio.google.com/)
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
