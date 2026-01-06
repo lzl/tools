@@ -267,6 +267,14 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 1) -> List[Chap
             href = item.get_name()
             href_to_item[href] = item
     
+    # Build spine order list for fallback lookup
+    spine_order: List[str] = []
+    for idref, _linear in book.spine:
+        if idref:
+            spine_item = book.get_item_with_id(idref)
+            if spine_item and spine_item.get_type() == ebooklib.ITEM_DOCUMENT:
+                spine_order.append(spine_item.get_name())
+    
     chapters: List[Chapter] = []
     
     # Try TOC first
@@ -291,6 +299,7 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 1) -> List[Chap
                     for key in href_to_item:
                         if key.endswith(file_href) or file_href.endswith(key):
                             item = href_to_item[key]
+                            file_href = key
                             break
                 
                 if item is None:
@@ -303,6 +312,18 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 1) -> List[Chap
                 seen_hrefs.add(full_href)
                 
                 text = extract_text_from_html(item.get_content(), fragment)
+                
+                # If text is empty (e.g., page only has images), try next spine item
+                if not text and file_href in spine_order:
+                    spine_idx = spine_order.index(file_href)
+                    if spine_idx + 1 < len(spine_order):
+                        next_href = spine_order[spine_idx + 1]
+                        next_item = href_to_item.get(next_href)
+                        if next_item:
+                            text = extract_text_from_html(next_item.get_content())
+                            if text:
+                                full_href = next_href  # Update href to actual content file
+                
                 if text:
                     chapters.append(Chapter(
                         index=len(chapters) + 1,
