@@ -3,7 +3,7 @@ description: Design principles for tools in this project
 alwaysApply: true
 ---
 
-# Tool Design Principles
+# Python Tool Design Principles
 
 ## Tool Design
 - **Single Responsibility Principle**: Each tool focuses on one thing only, with decoupled functionality
@@ -31,3 +31,44 @@ alwaysApply: true
 - Use `uv add --script <file>.py <dependency>` to add dependencies to a script
 - Dependencies will be automatically added to the inline script metadata
 - Example: `uv add --script file_size.py requests`
+
+---
+
+# Rust Tool Design Principles
+
+## Tool Design
+- **Single Responsibility Principle**: Each tool focuses on one thing only, with decoupled functionality
+- Each Rust file is an independent tool
+- Each tool should have a `main()` function as the entry point
+- Tools should not have dependencies on each other, maintaining independence
+
+## Project Structure
+- Each tool is an independent `.rs` file
+- Use embedded `Cargo.toml` metadata at the top of each script file:
+  ```rust
+  #!/usr/bin/env -S cargo +nightly -Zscript
+  ---
+  [dependencies]
+  ---
+  ```
+- Run via `cargo +nightly -Zscript <file>.rs` (e.g., `cargo +nightly -Zscript file_size.rs`)
+- Scripts are self-contained and don't require project installation
+
+## Prerequisites
+- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- Install nightly toolchain: `rustup install nightly`
+
+## Code Standards
+- Use standard command-line argument processing (`std::env::args`)
+- Provide clear error messages and usage instructions
+- Keep code simple and readable
+
+## Adding Dependencies
+- Add dependencies to the embedded `Cargo.toml` section in the script
+- Example:
+  ```rust
+  ---
+  [dependencies]
+  clap = "4.0"
+  ---
+  ```
