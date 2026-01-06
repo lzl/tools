@@ -25,6 +25,39 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm'}
 
 
+def format_timestamp(seconds: float) -> str:
+    """Convert seconds to VTT timestamp format (HH:MM:SS.mmm)"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+def convert_to_vtt(verbose_json: dict) -> str:
+    """Convert Groq verbose_json response to WebVTT format"""
+    lines = ["WEBVTT", ""]
+    
+    segments = verbose_json.get("segments", [])
+    
+    for i, segment in enumerate(segments):
+        start = segment.get("start", 0)
+        end = segment.get("end", 0)
+        text = segment.get("text", "").strip()
+        
+        if text:
+            # Add cue number (optional but common in VTT)
+            lines.append(str(i + 1))
+            # Add timestamp line
+            lines.append(f"{format_timestamp(start)} --> {format_timestamp(end)}")
+            # Add text
+            lines.append(text)
+            # Add blank line between cues
+            lines.append("")
+    
+    return "\n".join(lines)
+
+
 def find_latest_audio_file(directory: Path) -> Path:
     """Find the latest modified audio file in the directory"""
     audio_files = [
@@ -111,7 +144,7 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
                     }
                     data = {
                         'model': 'whisper-large-v3-turbo',
-                        'response_format': 'vtt'
+                        'response_format': 'verbose_json'  # Use verbose_json to get timestamps
                     }
                     headers = {
                         'Authorization': f'Bearer {api_key}'
@@ -161,8 +194,9 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
     if response is None or response.status_code != 200:
         raise RuntimeError(f"Failed to transcribe after {max_retries} attempts")
     
-    # Get VTT content from response
-    vtt_content = response.text
+    # Parse JSON response and convert to VTT
+    verbose_json = response.json()
+    vtt_content = convert_to_vtt(verbose_json)
     
     # Generate output filename
     output_filename = f"{audio_path.stem}.vtt"
