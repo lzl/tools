@@ -107,6 +107,30 @@ uv run epub_guide_html.py book.epub --chapters 1 --no-book-guide
 **Environment Variables:**
 - `GEMINI_API_KEY`: Required for AI generation (get from https://aistudio.google.com/)
 
+### epub-to-clipboard
+
+Copy EPUB chapter content to the system clipboard.
+
+**Features:**
+- Supports chapter selection (TOC-based, with spine fallback)
+- Cross-platform clipboard support (macOS/Windows/Linux)
+- Chapter title separators for easy navigation in pasted content
+
+**Examples:**
+```bash
+# List chapters in an EPUB
+uv run epub_to_clipboard.py --list book.epub
+
+# Copy specific chapters to clipboard
+uv run epub_to_clipboard.py book.epub --chapters 1,3-5
+
+# Copy all chapters
+uv run epub_to_clipboard.py book.epub --chapters all
+
+# Copy first chapter (default if --chapters not specified)
+uv run epub_to_clipboard.py book.epub
+```
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
