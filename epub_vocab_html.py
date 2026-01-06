@@ -942,7 +942,7 @@ def main():
     parser.add_argument("--max-words", type=int, default=200, help="Max words to output (default: 200)")
     parser.add_argument("--min-phrase-count", type=int, default=2, help="Min phrase occurrence count (default: 2)")
     parser.add_argument("--max-phrases", type=int, default=100, help="Max phrases to output (default: 100)")
-    parser.add_argument("--max-toc-depth", type=int, default=1, help="Max TOC depth for chapters (default: 1)")
+    parser.add_argument("--max-toc-depth", type=int, default=10, help="Max TOC depth for chapters (default: 10)")
     parser.add_argument("--no-translate", action="store_true", help="Skip translation (output empty translations)")
     
     args = parser.parse_args()
