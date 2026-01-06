@@ -33,6 +33,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+import ebooklib
 from ebooklib import epub
 from google import genai
 from google.genai import errors
@@ -261,7 +262,7 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 1) -> List[Chap
     # Build a map from href (without fragment) to item
     href_to_item: Dict[str, epub.EpubItem] = {}
     for item in book.get_items():
-        if item.get_type() == epub.ITEM_DOCUMENT:
+        if item.get_type() == ebooklib.ITEM_DOCUMENT:
             # Normalize href
             href = item.get_name()
             href_to_item[href] = item
@@ -319,7 +320,7 @@ def get_chapters_from_epub(epub_path: Path, max_toc_depth: int = 1) -> List[Chap
     
     for idref in spine_ids:
         item = book.get_item_with_id(idref)
-        if item is None or item.get_type() != epub.ITEM_DOCUMENT:
+        if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
             continue
         
         content = item.get_content()
