@@ -131,6 +131,31 @@ uv run epub_to_clipboard.py book.epub --chapters all
 uv run epub_to_clipboard.py book.epub
 ```
 
+### transcribe-audio-groq
+
+Transcribe audio files to WebVTT subtitles using Groq's Whisper API (`whisper-large-v3-turbo` model).
+
+**Features:**
+- Fast transcription via Groq's optimized Whisper model
+- Outputs WebVTT format with timestamps
+- Auto-selects latest audio file from `input_dir/` if no file specified
+- Supports: mp3, wav, m4a, flac, ogg, webm (max 25MB)
+
+**Examples:**
+```bash
+# Transcribe a specific audio file
+uv run transcribe_audio_groq.py audio.mp3
+
+# Transcribe with custom output directory
+uv run transcribe_audio_groq.py audio.mp3 ./subtitles
+
+# Auto-select latest audio from input_dir/
+uv run transcribe_audio_groq.py
+```
+
+**Environment Variables:**
+- `GROQ_API_KEY`: Required (get from https://console.groq.com/)
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
