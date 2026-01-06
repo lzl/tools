@@ -59,6 +59,54 @@ uv run epub_vocab_html.py book.epub --chapters 1 --zipf-max 5.0 --min-count 2
 **Environment Variables:**
 - `GEMINI_API_KEY`: Required for translation (get from https://aistudio.google.com/)
 
+### epub-guide-html
+
+Generate a comprehensive reading guide (导读手册) from an English EPUB for ESL learners. The guide helps readers with limited English proficiency understand and enjoy the original text.
+
+**Features:**
+- Supports chapter selection (TOC-based, with spine fallback)
+- Deep analysis via Gemini API with intelligent chunking for long chapters
+- SQLite caching for efficient regeneration
+- Beautiful single-file HTML output (can be printed to PDF via browser)
+
+**Guide Contents (per chapter):**
+- 📌 **读前导读**: Chapter positioning, focus points, difficulty hints, reading strategies
+- 👤 **人物/专有名词**: Characters, locations, and key terms with explanations
+- 📖 **情节结构**: Scene-by-scene plot breakdown with turning points marked
+- 📝 **重点词汇**: 15-25 key vocabulary items with context and usage notes
+- 💬 **重点句精讲**: 5-10 complex sentences with translations and analysis
+- 📐 **语法与风格**: Grammar patterns and writing style features
+- 🌍 **文化背景**: Cultural context, allusions, and metaphors explained
+- ✏️ **章节自测**: Comprehension quiz with collapsible answers
+- ⚠️ **读后复盘**: Full plot summary and character analysis (spoiler, collapsed)
+
+**Book-level overview:**
+- Global character list with relationships
+- Core themes and motifs
+- Cross-chapter vocabulary summary
+- Reading plan suggestions
+
+**Examples:**
+```bash
+# List chapters in an EPUB
+uv run epub_guide_html.py --list book.epub
+
+# Generate guide for specific chapters
+uv run epub_guide_html.py book.epub --chapters 1,3-5 --out output_dir/book_guide.html
+
+# Generate guide for all chapters
+uv run epub_guide_html.py book.epub --chapters all
+
+# Adjust chunk size for very long chapters
+uv run epub_guide_html.py book.epub --chapters 1 --max-chunk-chars 8000
+
+# Skip book-level overview (faster for single chapter)
+uv run epub_guide_html.py book.epub --chapters 1 --no-book-guide
+```
+
+**Environment Variables:**
+- `GEMINI_API_KEY`: Required for AI generation (get from https://aistudio.google.com/)
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
