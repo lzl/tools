@@ -323,15 +323,15 @@ def add_video_url_to_vtt(vtt_path, video_url):
 
 
 def transcribe_audio(audio_path, output_dir, video_url=None):
-    """Transcribe audio to VTT using transcribe_audio.py tool"""
+    """Transcribe audio to VTT using transcribe_audio_groq.py tool"""
     print(f"\n=== Step 6: Transcribing audio ===")
     
-    # Get the script directory to find transcribe_audio.py
+    # Get the script directory to find transcribe_audio_groq.py
     script_dir = Path(__file__).parent
-    transcribe_script = script_dir / "transcribe_audio.py"
+    transcribe_script = script_dir / "transcribe_audio_groq.py"
     
     if not transcribe_script.exists():
-        raise FileNotFoundError(f"transcribe_audio.py not found at {transcribe_script}")
+        raise FileNotFoundError(f"transcribe_audio_groq.py not found at {transcribe_script}")
     
     cmd = ["uv", "run", str(transcribe_script), str(audio_path), str(output_dir)]
     
