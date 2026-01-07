@@ -229,48 +229,6 @@ def speed_up_audio_if_needed(audio_path, temp_dir):
         return audio_path
 
 
-def convert_to_mp3_if_needed(audio_path, temp_dir):
-    """Convert audio to MP3 by delegating to convert_to_mp3.py"""
-    print(f"\n=== Step 5: Converting audio format ===")
-    
-    if audio_path.suffix.lower() == '.mp3':
-        print("Audio is already in MP3 format, skipping conversion")
-        return audio_path
-    
-    script_dir = Path(__file__).parent
-    convert_script = script_dir / "convert_to_mp3.py"
-    
-    if not convert_script.exists():
-        raise FileNotFoundError(f"convert_to_mp3.py not found at {convert_script}")
-    
-    mp3_path = temp_dir / f"{audio_path.stem}.mp3"
-    
-    # Avoid interactive overwrite prompt in convert_to_mp3.py
-    if mp3_path.exists():
-        mp3_path.unlink()
-    
-    cmd = ["uv", "run", str(convert_script), str(audio_path), str(temp_dir)]
-    
-    try:
-        subprocess.run(cmd, check=True, capture_output=False)
-        
-        if mp3_path.exists():
-            print(f"✓ Audio converted to MP3: {mp3_path.name}")
-            return mp3_path
-        
-        print("Warning: Converted MP3 file not found, using original")
-        return audio_path
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Warning: Failed to convert to MP3 (exit code {e.returncode})")
-        print("Using original file format")
-        return audio_path
-    except Exception as e:
-        print(f"Warning: Error during conversion: {e}")
-        print("Using original file format")
-        return audio_path
-
-
 def add_video_url_to_vtt(vtt_path, video_url):
     """Add video URL as a comment in the VTT file header"""
     if not vtt_path.exists():
@@ -324,7 +282,7 @@ def add_video_url_to_vtt(vtt_path, video_url):
 
 def transcribe_audio(audio_path, output_dir, video_url=None):
     """Transcribe audio to VTT using transcribe_audio_groq.py tool"""
-    print(f"\n=== Step 6: Transcribing audio ===")
+    print(f"\n=== Step 5: Transcribing audio ===")
     
     # Get the script directory to find transcribe_audio_groq.py
     script_dir = Path(__file__).parent
@@ -412,20 +370,10 @@ def main():
             step_name="Speeding up audio"
         )
         
-        # Step 5: Convert to MP3 if needed (e.g., webm format)
-        mp3_audio = retry_step(
-            convert_to_mp3_if_needed,
-            final_audio,
-            temp_dir,
-            max_retries=2,
-            delay=5,
-            step_name="Converting audio format"
-        )
-        
-        # Step 6: Transcribe audio to VTT
+        # Step 5: Transcribe audio to VTT
         vtt_file = retry_step(
             transcribe_audio,
-            mp3_audio,
+            final_audio,
             output_dir,
             video_url,
             max_retries=2,
