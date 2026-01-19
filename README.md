@@ -168,6 +168,35 @@ cargo +nightly -Zscript transcribe_audio_groq.rs
 **Environment Variables:**
 - `GROQ_API_KEY`: Required (get from https://console.groq.com/)
 
+### bilibili-subtitle
+
+Download subtitles from Bilibili videos, including AI-generated subtitles.
+
+**Features:**
+- Downloads subtitles in SRT format
+- Supports AI-generated subtitles (自动字幕)
+- Default language: ai-zh (AI-generated Chinese)
+- Requires cookies.txt for AI subtitle access
+
+**Examples:**
+```bash
+# Download AI Chinese subtitles (default)
+uv run bilibili_subtitle.py https://www.bilibili.com/video/BV1xx411c7XW
+
+# Download AI English subtitles
+uv run bilibili_subtitle.py https://www.bilibili.com/video/BV1xx411c7XW --lang ai-en
+
+# Custom output directory
+uv run bilibili_subtitle.py https://www.bilibili.com/video/BV1xx411c7XW --out ./subtitles
+
+# List available subtitles for a video
+yt-dlp --list-subs "https://www.bilibili.com/video/BV1xx411c7XW"
+```
+
+**Tips:**
+- Place a `cookies.txt` file in the current directory (required for AI subtitles)
+- Common language codes: `ai-zh` (AI Chinese), `ai-en` (AI English), `zh-Hans`, `zh-Hant`
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
