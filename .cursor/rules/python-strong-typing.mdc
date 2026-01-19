@@ -1,0 +1,92 @@
+---
+description: Strong typing standards for Python tools
+alwaysApply: true
+---
+
+# Python Strong Typing Standards
+
+## Static Type Hints
+
+- **All functions must have complete type annotations** for parameters and return values
+- **Avoid `Any`** – use specific types, `Union`, `Literal`, or `Protocol` instead
+- Use `TypedDict` for dictionary structures with known keys
+- Use `@dataclass` for structured data objects
+- Use `Literal` for string/int constants with fixed values
+- Use `Protocol` for duck-typed interfaces
+
+## Boundary Typing
+
+- Parse external data (JSON, CLI args, API responses) into typed structures immediately
+- Validate data at I/O boundaries before passing to internal functions
+- Return typed objects from parsing functions, not raw `dict`
+
+Example:
+```python
+from typing import TypedDict
+
+class SubtitleEntry(TypedDict):
+    start: float
+    end: float
+    text: str
+
+def parse_subtitle(raw: dict) -> SubtitleEntry:
+    return SubtitleEntry(
+        start=float(raw["start"]),
+        end=float(raw["end"]),
+        text=str(raw["text"]),
+    )
+```
+
+## Runtime Validation
+
+- Use `typeguard` for runtime type checking on boundary functions
+- Apply `@typechecked` decorator to `main()` and any function that handles external input
+- Add `typeguard` to script dependencies when runtime checks are needed:
+  ```
+  uv add --script <file>.py typeguard
+  ```
+
+Example:
+```python
+# /// script
+# dependencies = ["typeguard"]
+# ///
+
+from typeguard import typechecked
+
+@typechecked
+def main() -> None:
+    ...
+```
+
+## Static Analysis
+
+- Code should pass `pyright` in strict mode (or `mypy --strict`)
+- Run locally before committing: `pyright <file>.py` or `mypy --strict <file>.py`
+- Fix all type errors rather than suppressing them with `# type: ignore`
+
+## Common Patterns
+
+### CLI argument typing
+```python
+def parse_args(argv: list[str]) -> tuple[str, int]:
+    if len(argv) < 3:
+        raise SystemExit("Usage: script.py <path> <count>")
+    return argv[1], int(argv[2])
+```
+
+### Optional values
+```python
+from typing import Optional
+
+def get_value(data: dict[str, str], key: str) -> Optional[str]:
+    return data.get(key)
+```
+
+### Generic containers
+```python
+from typing import Sequence
+
+def process_items(items: Sequence[str]) -> list[str]:
+    return [item.upper() for item in items]
+```
