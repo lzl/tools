@@ -197,6 +197,33 @@ yt-dlp --list-subs "https://www.bilibili.com/video/BV1xx411c7XW"
 - Place a `cookies.txt` file in the current directory (required for AI subtitles)
 - Common language codes: `ai-zh` (AI Chinese), `ai-en` (AI English), `zh-Hans`, `zh-Hant`
 
+### jable-download (Rust)
+
+Download videos from jable.tv with automatic Cloudflare bypass.
+
+**Features:**
+- Automatic Cloudflare verification bypass using headless Chrome
+- Downloads HLS streams and merges into MP4
+- Progress bar with concurrent segment downloading
+- Auto-extracts video title for filename
+
+**Examples:**
+```bash
+# Download video (auto-named from page title)
+cargo +nightly -Zscript jable_download.rs "https://jable.tv/videos/miaa-033/"
+
+# Download with custom output name
+cargo +nightly -Zscript jable_download.rs "https://jable.tv/videos/miaa-033/" MIAA-033
+
+# Download with custom output name and directory
+cargo +nightly -Zscript jable_download.rs "https://jable.tv/videos/miaa-033/" MIAA-033 ./downloads
+```
+
+**Requirements:**
+- Google Chrome or Chromium installed
+- ffmpeg installed (for merging video segments)
+- Rust nightly toolchain (`rustup install nightly`)
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
