@@ -8,6 +8,7 @@ reqwest = { version = "0.12", features = ["stream"] }
 regex = "1"
 indicatif = "0.17"
 tokio-stream = "0.1"
+url = "2"
 ---
 
 //! Jable.tv Video Downloader (with Cloudflare bypass)
@@ -36,6 +37,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use url::Url;
 
 /// Extract m3u8 URL from page HTML
 fn extract_m3u8_url(html: &str) -> Option<String> {
@@ -96,6 +98,7 @@ async fn fetch_page_with_browser(url: &str) -> Result<String, String> {
     // Wait for Cloudflare challenge to complete
     // Check periodically if hlsUrl appears in the page
     let mut html = String::new();
+    let mut found_hls_url = false;
     for i in 0..60 {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -106,6 +109,7 @@ async fn fetch_page_with_browser(url: &str) -> Result<String, String> {
 
         if html.contains("hlsUrl") {
             println!("      Verification passed!");
+            found_hls_url = true;
             break;
         }
 
@@ -114,12 +118,11 @@ async fn fetch_page_with_browser(url: &str) -> Result<String, String> {
             if i % 10 == 0 && i > 0 {
                 println!("      Waiting for Cloudflare verification... ({}s)", i);
             }
-            continue;
         }
+    }
 
-        if i == 59 {
-            return Err("Timeout: Cloudflare verification failed or page structure changed".to_string());
-        }
+    if !found_hls_url {
+        return Err("Timeout: Could not find video URL on page (Cloudflare verification may have failed or page structure changed)".to_string());
     }
 
     // Close browser
@@ -241,7 +244,9 @@ fn merge_segments(temp_dir: &Path, segments: &[String], output_path: &Path) -> R
             "-c",
             "copy",
             "-y",
-            output_abs.to_str().unwrap(),
+            output_abs
+                .to_str()
+                .ok_or_else(|| "Output path contains invalid UTF-8 characters".to_string())?,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -305,9 +310,16 @@ async fn main() -> Result<(), String> {
 
     let video_url = &args[1];
 
-    // Validate URL
-    if !video_url.contains("jable.tv/videos/") {
-        return Err("Invalid URL. Must be a jable.tv video URL".to_string());
+    // Validate URL using proper URL parsing
+    let parsed_url =
+        Url::parse(video_url).map_err(|e| format!("Invalid URL format: {}", e))?;
+
+    if parsed_url.host_str() != Some("jable.tv") {
+        return Err("Invalid URL. Host must be jable.tv".to_string());
+    }
+
+    if !parsed_url.path().starts_with("/videos/") {
+        return Err("Invalid URL. Path must start with /videos/".to_string());
     }
 
     // Step 1: Fetch video page with headless browser
@@ -389,7 +401,10 @@ async fn main() -> Result<(), String> {
             let semaphore = Arc::clone(&semaphore);
 
             tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .expect("Semaphore closed unexpectedly");
                 if download_segment(&client, &url, &seg_output_path, 3)
                     .await
                     .is_err()
