@@ -224,6 +224,45 @@ cargo +nightly -Zscript jable_download.rs "https://jable.tv/videos/miaa-033/" MI
 - ffmpeg installed (for merging video segments)
 - Rust nightly toolchain (`rustup install nightly`)
 
+### telegram-download
+
+Download videos from Telegram message links, including private channels/groups and content with download restrictions.
+
+**Features:**
+- Supports public and private channels/groups
+- Downloads videos even if "restrict saving content" is enabled
+- Batch download support (multiple links)
+- Progress bar with file size display
+- Session persistence (login once, reuse later)
+
+**Examples:**
+```bash
+# Download single video
+uv run telegram_download.py "https://t.me/channel_name/123"
+
+# Download from private channel
+uv run telegram_download.py "https://t.me/c/1234567890/456"
+
+# Download multiple videos
+uv run telegram_download.py "https://t.me/ch1/123" "https://t.me/ch2/456"
+
+# Custom output directory
+uv run telegram_download.py "https://t.me/channel/123" --out ./downloads
+```
+
+**Environment Variables:**
+- `TELEGRAM_API_ID`: Your Telegram API ID (get from https://my.telegram.org)
+- `TELEGRAM_API_HASH`: Your Telegram API Hash
+
+**First Run:**
+- On first run, you'll be prompted to enter your phone number and verification code
+- A session file (`telegram_downloader.session`) will be saved for future use
+- Your account must have access to the target channel/group
+
+**Message Link Formats:**
+- Public channel: `https://t.me/channel_name/12345`
+- Private channel: `https://t.me/c/1234567890/12345`
+
 ## Adding New Tools
 
 1. Create a new Python file (e.g., `my_tool.py`)
