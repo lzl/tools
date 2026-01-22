@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFilename
 from tqdm import tqdm
 from typeguard import typechecked
@@ -308,11 +309,27 @@ async def main_async() -> None:
     client = TelegramClient(SESSION_NAME, api_id, api_hash)
 
     try:
-        await client.start()
+        # Connect and handle authentication
+        await client.connect()
 
         if not await client.is_user_authorized():
             print("First-time login required.")
-            print("Please follow the prompts to authenticate.")
+            print()
+
+            phone = input("Please enter your phone number: ")
+            await client.send_code_request(phone)
+
+            code = input("Please enter the code you received: ")
+
+            try:
+                await client.sign_in(phone, code)
+            except SessionPasswordNeededError:
+                # 2FA is enabled, ask for password
+                print("Two-factor authentication is enabled on your account.")
+                password = input("Please enter your 2FA password: ")
+                await client.sign_in(password=password)
+
+            print("Login successful!")
             print()
 
         # Download each video
