@@ -15,3 +15,7 @@ cookies.txt
 
 input_dir/
 output_dir/
+
+# Telegram download
+telegram_downloader.session
+telegram_downloader.session-journal
