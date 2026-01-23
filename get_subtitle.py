@@ -412,12 +412,12 @@ def transcribe_single_segment(
     """
     print(f"  Transcribing segment {segment_index + 1}/{total_segments}: {segment_path.name}")
     
-    # Get the script directory to find transcribe_audio_groq.py
+    # Get the script directory to find transcribe_media_groq.py
     script_dir = Path(__file__).parent
-    transcribe_script = script_dir / "transcribe_audio_groq.py"
+    transcribe_script = script_dir / "transcribe_media_groq.py"
     
     if not transcribe_script.exists():
-        raise FileNotFoundError(f"transcribe_audio_groq.py not found at {transcribe_script}")
+        raise FileNotFoundError(f"transcribe_media_groq.py not found at {transcribe_script}")
     
     cmd = ["uv", "run", str(transcribe_script), str(segment_path), str(output_dir)]
     
@@ -555,15 +555,15 @@ def transcribe_audio(
     output_dir: Path,
     video_url: Optional[str] = None
 ) -> Path:
-    """Transcribe audio to VTT using transcribe_audio_groq.py tool"""
+    """Transcribe audio to VTT using transcribe_media_groq.py tool"""
     print(f"\n=== Step 4: Transcribing audio ===")
     
-    # Get the script directory to find transcribe_audio_groq.py
+    # Get the script directory to find transcribe_media_groq.py
     script_dir = Path(__file__).parent
-    transcribe_script = script_dir / "transcribe_audio_groq.py"
+    transcribe_script = script_dir / "transcribe_media_groq.py"
     
     if not transcribe_script.exists():
-        raise FileNotFoundError(f"transcribe_audio_groq.py not found at {transcribe_script}")
+        raise FileNotFoundError(f"transcribe_media_groq.py not found at {transcribe_script}")
     
     cmd = ["uv", "run", str(transcribe_script), str(audio_path), str(output_dir)]
     
