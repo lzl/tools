@@ -25,6 +25,25 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 # https://console.groq.com/docs/speech-to-text
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga'}
 
+# MIME type mapping for supported formats
+MIME_TYPES: dict[str, str] = {
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.flac': 'audio/flac',
+    '.ogg': 'audio/ogg',
+    '.webm': 'audio/webm',
+    '.mp4': 'video/mp4',
+    '.mpeg': 'video/mpeg',
+    '.mpga': 'audio/mpeg',
+}
+
+
+def get_mime_type(file_path: Path) -> str:
+    """Get the appropriate MIME type for a file based on its extension"""
+    suffix = file_path.suffix.lower()
+    return MIME_TYPES.get(suffix, 'application/octet-stream')
+
 
 def format_timestamp(seconds: float) -> str:
     """Convert seconds to VTT timestamp format (HH:MM:SS.mmm)"""
@@ -140,8 +159,9 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
         for attempt in range(max_retries):
             try:
                 with open(upload_path, 'rb') as audio_file:
+                    mime_type = get_mime_type(upload_path)
                     files = {
-                        'file': (upload_path.name, audio_file, 'audio/mpeg')
+                        'file': (upload_path.name, audio_file, mime_type)
                     }
                     data = {
                         'model': 'whisper-large-v3-turbo',
