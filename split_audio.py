@@ -14,8 +14,8 @@ from typing import Optional
 from typeguard import typechecked
 
 
-# Supported audio formats
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm'}
+# Supported audio/video formats that can be split with ffmpeg
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm', '.mp4', '.mpeg', '.mpga'}
 
 # Default segment duration: 25 minutes in seconds
 DEFAULT_SEGMENT_SECONDS = 25 * 60

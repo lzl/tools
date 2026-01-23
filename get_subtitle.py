@@ -309,8 +309,9 @@ def download_audio(
     try:
         subprocess.run(cmd, check=True, capture_output=False)
         
-        # Find the downloaded audio file
-        audio_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm'}
+        # Find the downloaded audio/video file
+        # Include .mp4 since Groq API supports it directly for transcription
+        audio_extensions = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm', '.mp4', '.mpeg', '.mpga'}
         audio_files = [
             f for f in temp_dir.iterdir()
             if f.is_file() and f.suffix.lower() in audio_extensions

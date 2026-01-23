@@ -21,8 +21,9 @@ import requests
 MAX_FILE_SIZE_MB = 25
 GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-# Supported audio formats per Groq SKILL.md
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm'}
+# Supported audio/video formats per Groq API documentation
+# https://console.groq.com/docs/speech-to-text
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga'}
 
 
 def format_timestamp(seconds: float) -> str:
