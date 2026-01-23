@@ -5,7 +5,7 @@
 # ]
 # ///
 
-"""A tool to transcribe audio files to text using Groq Whisper API"""
+"""A tool to transcribe audio/video files to text using Groq Whisper API"""
 
 import sys
 import os
@@ -23,7 +23,7 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 # Supported audio/video formats per Groq API documentation
 # https://console.groq.com/docs/speech-to-text
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga'}
+MEDIA_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga'}
 
 # MIME type mapping for supported formats
 MIME_TYPES: dict[str, str] = {
@@ -78,18 +78,18 @@ def convert_to_vtt(verbose_json: dict) -> str:
     return "\n".join(lines)
 
 
-def find_latest_audio_file(directory: Path) -> Path:
-    """Find the latest modified audio file in the directory"""
-    audio_files = [
+def find_latest_media_file(directory: Path) -> Path:
+    """Find the latest modified media file in the directory"""
+    media_files = [
         f for f in directory.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
     ]
     
-    if not audio_files:
-        raise FileNotFoundError(f"No audio files found in {directory}")
+    if not media_files:
+        raise FileNotFoundError(f"No media files found in {directory}")
     
     # Return the file with the latest modification time
-    latest_file = max(audio_files, key=lambda f: f.stat().st_mtime)
+    latest_file = max(media_files, key=lambda f: f.stat().st_mtime)
     return latest_file
 
 
@@ -106,7 +106,7 @@ def create_ascii_safe_temp_file(source_path: Path) -> Path:
     """Create a temporary file with ASCII-safe filename from source file"""
     # Generate ASCII-safe filename: use stem hash + extension
     stem_hash = hashlib.md5(str(source_path.stem).encode('utf-8')).hexdigest()[:8]
-    safe_filename = f"audio_{stem_hash}{source_path.suffix}"
+    safe_filename = f"media_{stem_hash}{source_path.suffix}"
     
     # Create temporary file in same directory as source (to preserve permissions)
     temp_path = source_path.parent / safe_filename
@@ -122,27 +122,27 @@ def is_retryable_status(status_code: int) -> bool:
     return status_code in {429, 500, 502, 503, 504}
 
 
-def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path) -> Path:
-    """Transcribe audio file using Groq Whisper API"""
+def transcribe_media_with_groq(media_path: Path, api_key: str, output_dir: Path) -> Path:
+    """Transcribe media file using Groq Whisper API"""
     
-    print(f"Loading audio file: {audio_path}")
-    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+    print(f"Loading media file: {media_path}")
+    file_size_mb = media_path.stat().st_size / (1024 * 1024)
     print(f"File size: {file_size_mb:.2f} MB")
     
     # Check file size limit
     if file_size_mb > MAX_FILE_SIZE_MB:
         raise ValueError(
             f"File size ({file_size_mb:.2f} MB) exceeds Groq's limit of {MAX_FILE_SIZE_MB} MB. "
-            f"Please compress or split the audio file."
+            f"Please compress or split the media file."
         )
     
     # Check if filename is ASCII-safe, create temp file if not
     temp_file = None
-    upload_path = audio_path
+    upload_path = media_path
     
-    if not is_ascii_safe(str(audio_path.name)):
+    if not is_ascii_safe(str(media_path.name)):
         print(f"Filename contains non-ASCII characters, creating temporary file with ASCII-safe name...")
-        temp_file = create_ascii_safe_temp_file(audio_path)
+        temp_file = create_ascii_safe_temp_file(media_path)
         upload_path = temp_file
         print(f"Using temporary file: {temp_file.name}")
     
@@ -153,7 +153,7 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
     response = None
     last_error = None
     
-    print("\nTranscribing audio with Groq Whisper API...")
+    print("\nTranscribing media with Groq Whisper API...")
     
     try:
         for attempt in range(max_retries):
@@ -220,7 +220,7 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
     vtt_content = convert_to_vtt(verbose_json)
     
     # Generate output filename
-    output_filename = f"{audio_path.stem}.vtt"
+    output_filename = f"{media_path.stem}.vtt"
     output_path = output_dir / output_filename
     
     # Save transcript to file
@@ -231,7 +231,7 @@ def transcribe_audio_with_groq(audio_path: Path, api_key: str, output_dir: Path)
 
 
 def main():
-    """Transcribe audio file to text using Groq Whisper API"""
+    """Transcribe media file to text using Groq Whisper API"""
     # Load environment variables from .env file
     load_dotenv()
     
@@ -252,8 +252,8 @@ def main():
             print(f"Error: Input directory '{input_dir}' does not exist")
             sys.exit(1)
         try:
-            input_file = find_latest_audio_file(input_dir)
-            print(f"Using latest audio file: {input_file}")
+            input_file = find_latest_media_file(input_dir)
+            print(f"Using latest media file: {input_file}")
         except FileNotFoundError as e:
             print(f"Error: {e}")
             sys.exit(1)
@@ -283,7 +283,7 @@ def main():
     print()
     
     try:
-        output_path = transcribe_audio_with_groq(input_file, api_key, output_dir)
+        output_path = transcribe_media_with_groq(input_file, api_key, output_dir)
         print(f"\nSuccess! Transcription saved to: {output_path.absolute()}")
     except FileNotFoundError as e:
         print(f"\nError: {e}")

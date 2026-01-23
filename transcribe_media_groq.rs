@@ -8,7 +8,7 @@ dotenvy = "0.15"
 md-5 = "0.10"
 ---
 
-//! A tool to transcribe audio files to text using Groq Whisper API
+//! A tool to transcribe audio/video files to text using Groq Whisper API
 
 use std::env;
 use std::fs::{self, File};
@@ -27,8 +27,25 @@ use serde::Deserialize;
 const MAX_FILE_SIZE_MB: u64 = 25;
 const GROQ_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 
-// Supported audio formats per Groq API
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "flac", "ogg", "webm"];
+// Supported audio/video formats per Groq API documentation
+// https://console.groq.com/docs/speech-to-text
+const MEDIA_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "flac", "ogg", "webm", "mp4", "mpeg", "mpga"];
+
+/// Get MIME type for a file based on its extension
+fn get_mime_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("m4a") => "audio/mp4",
+        Some("flac") => "audio/flac",
+        Some("ogg") => "audio/ogg",
+        Some("webm") => "audio/webm",
+        Some("mp4") => "video/mp4",
+        Some("mpeg") => "video/mpeg",
+        Some("mpga") => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+}
 
 /// Segment from Groq verbose_json response
 #[derive(Debug, Deserialize)]
@@ -108,12 +125,12 @@ fn convert_to_vtt(segments: &[Segment]) -> String {
     lines.join("\n")
 }
 
-/// Find the latest modified audio file in the directory
-fn find_latest_audio_file(directory: &Path) -> Result<PathBuf, String> {
+/// Find the latest modified media file in the directory
+fn find_latest_media_file(directory: &Path) -> Result<PathBuf, String> {
     let entries = fs::read_dir(directory)
         .map_err(|e| format!("Cannot read directory '{}': {}", directory.display(), e))?;
 
-    let mut audio_files: Vec<(PathBuf, SystemTime)> = Vec::new();
+    let mut media_files: Vec<(PathBuf, SystemTime)> = Vec::new();
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Cannot read entry: {}", e))?;
@@ -122,10 +139,10 @@ fn find_latest_audio_file(directory: &Path) -> Result<PathBuf, String> {
         if path.is_file() {
             if let Some(ext) = path.extension() {
                 let ext_lower = ext.to_string_lossy().to_lowercase();
-                if AUDIO_EXTENSIONS.contains(&ext_lower.as_str()) {
+                if MEDIA_EXTENSIONS.contains(&ext_lower.as_str()) {
                     if let Ok(metadata) = fs::metadata(&path) {
                         if let Ok(modified) = metadata.modified() {
-                            audio_files.push((path, modified));
+                            media_files.push((path, modified));
                         }
                     }
                 }
@@ -133,13 +150,13 @@ fn find_latest_audio_file(directory: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    if audio_files.is_empty() {
-        return Err(format!("No audio files found in {}", directory.display()));
+    if media_files.is_empty() {
+        return Err(format!("No media files found in {}", directory.display()));
     }
 
     // Return the file with the latest modification time
-    audio_files.sort_by(|a, b| b.1.cmp(&a.1));
-    Ok(audio_files.into_iter().next().unwrap().0)
+    media_files.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(media_files.into_iter().next().unwrap().0)
 }
 
 /// Check if filename contains only ASCII characters
@@ -153,7 +170,7 @@ fn create_ascii_safe_temp_file(source_path: &Path) -> Result<PathBuf, String> {
     let stem = source_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("audio");
+        .unwrap_or("media");
 
     let mut hasher = Md5::new();
     hasher.update(stem.as_bytes());
@@ -166,7 +183,7 @@ fn create_ascii_safe_temp_file(source_path: &Path) -> Result<PathBuf, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("mp3");
 
-    let safe_filename = format!("audio_{}.{}", stem_hash, extension);
+    let safe_filename = format!("media_{}.{}", stem_hash, extension);
 
     // Create temporary file in same directory as source
     let temp_path = source_path.parent().unwrap_or(Path::new(".")).join(&safe_filename);
@@ -183,15 +200,15 @@ fn is_retryable_status(status_code: u16) -> bool {
     matches!(status_code, 429 | 500 | 502 | 503 | 504)
 }
 
-/// Transcribe audio file using Groq Whisper API
-fn transcribe_audio_with_groq(
-    audio_path: &Path,
+/// Transcribe media file using Groq Whisper API
+fn transcribe_media_with_groq(
+    media_path: &Path,
     api_key: &str,
     output_dir: &Path,
 ) -> Result<PathBuf, String> {
-    println!("Loading audio file: {}", audio_path.display());
+    println!("Loading media file: {}", media_path.display());
 
-    let metadata = fs::metadata(audio_path)
+    let metadata = fs::metadata(media_path)
         .map_err(|e| format!("Cannot read file metadata: {}", e))?;
 
     let file_size_bytes = metadata.len();
@@ -201,13 +218,13 @@ fn transcribe_audio_with_groq(
     // Check file size limit
     if file_size_bytes > MAX_FILE_SIZE_MB * 1024 * 1024 {
         return Err(format!(
-            "File size ({:.2} MB) exceeds Groq's limit of {} MB. Please compress or split the audio file.",
+            "File size ({:.2} MB) exceeds Groq's limit of {} MB. Please compress or split the media file.",
             file_size_mb, MAX_FILE_SIZE_MB
         ));
     }
 
     // Check if filename is ASCII-safe, create temp file if not
-    let filename = audio_path
+    let filename = media_path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
@@ -217,20 +234,20 @@ fn transcribe_audio_with_groq(
 
     if !is_ascii_safe(filename) {
         println!("Filename contains non-ASCII characters, creating temporary file with ASCII-safe name...");
-        let temp_path = create_ascii_safe_temp_file(audio_path)?;
+        let temp_path = create_ascii_safe_temp_file(media_path)?;
         println!("Using temporary file: {}", temp_path.file_name().unwrap_or_default().to_string_lossy());
         temp_guard = Some(TempFileGuard::new(temp_path));
         upload_path = temp_guard.as_ref().unwrap().path().unwrap();
     } else {
         temp_guard = None;
-        upload_path = audio_path;
+        upload_path = media_path;
     }
 
     // Retry logic with exponential backoff
     let max_retries = 3;
     let retry_delays = [10, 30]; // seconds between retries
 
-    println!("\nTranscribing audio with Groq Whisper API...");
+    println!("\nTranscribing media with Groq Whisper API...");
 
     let client = Client::builder()
         .timeout(Duration::from_secs(300)) // 5 minute timeout for large files
@@ -251,13 +268,14 @@ fn transcribe_audio_with_groq(
         let upload_filename = upload_path
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("audio.mp3")
+            .unwrap_or("media.mp3")
             .to_string();
 
         // Build multipart form
+        let mime_type = get_mime_type(upload_path);
         let file_part = Part::bytes(file_contents)
             .file_name(upload_filename)
-            .mime_str("audio/mpeg")
+            .mime_str(mime_type)
             .map_err(|e| format!("Failed to create file part: {}", e))?;
 
         let form = Form::new()
@@ -339,10 +357,10 @@ fn transcribe_audio_with_groq(
     let vtt_content = convert_to_vtt(&verbose_json.segments);
 
     // Generate output filename
-    let stem = audio_path
+    let stem = media_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("audio");
+        .unwrap_or("media");
     let output_filename = format!("{}.vtt", stem);
     let output_path = output_dir.join(&output_filename);
 
@@ -388,9 +406,9 @@ fn main() {
                 eprintln!("Error: Input directory '{}' does not exist", input_dir.display());
                 process::exit(1);
             }
-            match find_latest_audio_file(&input_dir) {
+            match find_latest_media_file(&input_dir) {
                 Ok(path) => {
-                    println!("Using latest audio file: {}", path.display());
+                    println!("Using latest media file: {}", path.display());
                     path
                 }
                 Err(e) => {
@@ -431,7 +449,7 @@ fn main() {
     );
     println!();
 
-    match transcribe_audio_with_groq(&input_file, &api_key, &output_dir) {
+    match transcribe_media_with_groq(&input_file, &api_key, &output_dir) {
         Ok(output_path) => {
             println!(
                 "\nSuccess! Transcription saved to: {}",

@@ -4,7 +4,7 @@
 # ]
 # ///
 
-"""A tool to split audio files into segments using ffmpeg"""
+"""A tool to split audio/video files into segments using ffmpeg"""
 
 import sys
 import subprocess
@@ -15,33 +15,33 @@ from typeguard import typechecked
 
 
 # Supported audio/video formats that can be split with ffmpeg
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm', '.mp4', '.mpeg', '.mpga'}
+MEDIA_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.webm', '.mp4', '.mpeg', '.mpga'}
 
 # Default segment duration: 25 minutes in seconds
 DEFAULT_SEGMENT_SECONDS = 25 * 60
 
 
-def find_latest_audio_file(directory: Path) -> Path:
-    """Find the latest modified audio file in the directory"""
-    audio_files = [
+def find_latest_media_file(directory: Path) -> Path:
+    """Find the latest modified media file in the directory"""
+    media_files = [
         f for f in directory.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
     ]
     
-    if not audio_files:
-        raise FileNotFoundError(f"No audio files found in {directory}")
+    if not media_files:
+        raise FileNotFoundError(f"No media files found in {directory}")
     
     # Return the file with the latest modification time
-    latest_file = max(audio_files, key=lambda f: f.stat().st_mtime)
+    latest_file = max(media_files, key=lambda f: f.stat().st_mtime)
     return latest_file
 
 
-def split_audio(input_path: Path, segment_seconds: int, output_dir: Path) -> list[Path]:
+def split_media(input_path: Path, segment_seconds: int, output_dir: Path) -> list[Path]:
     """
-    Split audio file into segments using ffmpeg.
+    Split media file into segments using ffmpeg.
     
     Args:
-        input_path: Path to the input audio file
+        input_path: Path to the input media file
         segment_seconds: Duration of each segment in seconds
         output_dir: Directory to save the segments
     
@@ -54,7 +54,7 @@ def split_audio(input_path: Path, segment_seconds: int, output_dir: Path) -> lis
     # Output pattern: stem_part_000.ext, stem_part_001.ext, etc.
     output_pattern = str(output_dir / f"{stem}_part_%03d{suffix}")
     
-    print(f"Splitting audio into {segment_seconds}s segments...")
+    print(f"Splitting media into {segment_seconds}s segments...")
     
     # Build ffmpeg command using segment muxer
     cmd = [
@@ -99,20 +99,20 @@ def split_audio(input_path: Path, segment_seconds: int, output_dir: Path) -> lis
 
 @typechecked
 def main() -> None:
-    """Split an audio file into segments"""
+    """Split a media file into segments"""
     # Parse arguments
     input_file: Optional[Path] = None
     segment_seconds: int = DEFAULT_SEGMENT_SECONDS
     output_dir: Path = Path("output_dir")
     
-    # Usage: split_audio <input_file> [segment_seconds] [output_dir]
+    # Usage: split_media <input_file> [segment_seconds] [output_dir]
     if len(sys.argv) < 2:
-        print("Usage: split_audio <input_file> [segment_seconds] [output_dir]")
+        print("Usage: split_media <input_file> [segment_seconds] [output_dir]")
         print(f"\nDefault segment duration: {DEFAULT_SEGMENT_SECONDS} seconds (25 minutes)")
         print("\nExample:")
-        print("  split_audio audio.mp3")
-        print("  split_audio audio.mp3 1500")
-        print("  split_audio audio.mp3 1500 ./segments")
+        print("  split_media video.mp4")
+        print("  split_media audio.mp3 1500")
+        print("  split_media video.mp4 1500 ./segments")
         sys.exit(1)
     
     input_file = Path(sys.argv[1])
@@ -138,9 +138,9 @@ def main() -> None:
         print(f"Error: '{input_file}' is not a file")
         sys.exit(1)
     
-    if input_file.suffix.lower() not in AUDIO_EXTENSIONS:
-        print(f"Error: '{input_file}' is not a supported audio format")
-        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+    if input_file.suffix.lower() not in MEDIA_EXTENSIONS:
+        print(f"Error: '{input_file}' is not a supported media format")
+        print(f"Supported formats: {', '.join(sorted(MEDIA_EXTENSIONS))}")
         sys.exit(1)
     
     # Ensure output directory exists
@@ -152,7 +152,7 @@ def main() -> None:
     print()
     
     try:
-        segments = split_audio(input_file, segment_seconds, output_dir)
+        segments = split_media(input_file, segment_seconds, output_dir)
         print(f"\nSuccess! Created {len(segments)} segment(s) in: {output_dir.absolute()}")
     except FileNotFoundError:
         print("\nError: ffmpeg not found. Please install it:")
