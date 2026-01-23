@@ -131,38 +131,38 @@ uv run epub_to_clipboard.py book.epub --chapters all
 uv run epub_to_clipboard.py book.epub
 ```
 
-### transcribe-audio-groq
+### transcribe-media-groq
 
-Transcribe audio files to WebVTT subtitles using Groq's Whisper API (`whisper-large-v3-turbo` model).
+Transcribe audio/video files to WebVTT subtitles using Groq's Whisper API (`whisper-large-v3-turbo` model).
 
 **Features:**
 - Fast transcription via Groq's optimized Whisper model
 - Outputs WebVTT format with timestamps
-- Auto-selects latest audio file from `input_dir/` if no file specified
-- Supports: mp3, wav, m4a, flac, ogg, webm (max 25MB)
+- Auto-selects latest media file from `input_dir/` if no file specified
+- Supports: mp3, wav, m4a, flac, ogg, webm, mp4, mpeg, mpga (max 25MB)
 
 **Examples (Python):**
 ```bash
-# Transcribe a specific audio file
-uv run transcribe_audio_groq.py audio.mp3
+# Transcribe a specific audio/video file
+uv run transcribe_media_groq.py video.mp4
 
 # Transcribe with custom output directory
-uv run transcribe_audio_groq.py audio.mp3 ./subtitles
+uv run transcribe_media_groq.py audio.mp3 ./subtitles
 
-# Auto-select latest audio from input_dir/
-uv run transcribe_audio_groq.py
+# Auto-select latest media from input_dir/
+uv run transcribe_media_groq.py
 ```
 
 **Examples (Rust):**
 ```bash
-# Transcribe a specific audio file
-cargo +nightly -Zscript transcribe_audio_groq.rs audio.mp3
+# Transcribe a specific audio/video file
+cargo +nightly -Zscript transcribe_media_groq.rs video.mp4
 
 # Transcribe with custom output directory
-cargo +nightly -Zscript transcribe_audio_groq.rs audio.mp3 ./subtitles
+cargo +nightly -Zscript transcribe_media_groq.rs audio.mp3 ./subtitles
 
-# Auto-select latest audio from input_dir/
-cargo +nightly -Zscript transcribe_audio_groq.rs
+# Auto-select latest media from input_dir/
+cargo +nightly -Zscript transcribe_media_groq.rs
 ```
 
 **Environment Variables:**
