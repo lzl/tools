@@ -18,13 +18,10 @@ from typing import Optional, Union
 
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
+from telethon.sessions import StringSession
 from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFilename
 from tqdm import tqdm
 from typeguard import typechecked
-
-
-# Session file name (unique to avoid conflicts with other tools)
-SESSION_NAME = "telegram_downloader"
 
 
 @dataclass
@@ -97,10 +94,12 @@ def print_usage() -> None:
     print("Environment Variables:")
     print("  TELEGRAM_API_ID      Your Telegram API ID (from https://my.telegram.org)")
     print("  TELEGRAM_API_HASH    Your Telegram API Hash")
+    print("  TELEGRAM_SESSION     Session string (obtained after first login)")
     print()
     print("First Run:")
     print("  On first run, you'll be prompted to enter your phone number and")
-    print("  verification code. A session file will be saved for future use.")
+    print("  verification code. A session string will be printed for you to save.")
+    print("  Add it to your environment: export TELEGRAM_SESSION='<session_string>'")
     print()
     print("Message Link Formats:")
     print("  Public channel:  https://t.me/channel_name/12345")
@@ -305,8 +304,11 @@ async def main_async() -> None:
     print(f"Videos to download: {len(links)}")
     print()
 
-    # Create Telegram client
-    client = TelegramClient(SESSION_NAME, api_id, api_hash)
+    # Get session string from environment (empty string for first-time login)
+    session_str = os.environ.get("TELEGRAM_SESSION", "")
+
+    # Create Telegram client with StringSession
+    client = TelegramClient(StringSession(session_str), api_id, api_hash)
 
     try:
         # Connect and handle authentication
@@ -330,6 +332,9 @@ async def main_async() -> None:
                 await client.sign_in(password=password)
 
             print("Login successful!")
+            print()
+            print("Save this session string to TELEGRAM_SESSION environment variable:")
+            print(client.session.save())
             print()
 
         # Download each video
