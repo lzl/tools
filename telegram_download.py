@@ -30,6 +30,7 @@ class ParsedArgs:
 
     message_links: list[str]
     output_dir: Path
+    max_concurrent: int
 
 
 @dataclass
@@ -45,6 +46,7 @@ def parse_args(args: list[str]) -> ParsedArgs:
     """Parse command line arguments."""
     message_links: list[str] = []
     output_dir: Path = Path("output_dir")
+    max_concurrent: int = 5
 
     i = 0
     while i < len(args):
@@ -54,6 +56,19 @@ def parse_args(args: list[str]) -> ParsedArgs:
                 print("Error: --out requires a directory path argument")
                 sys.exit(1)
             output_dir = Path(args[i + 1])
+            i += 2
+        elif arg == "--concurrency" or arg == "-j":
+            if i + 1 >= len(args):
+                print("Error: --concurrency requires a number argument")
+                sys.exit(1)
+            try:
+                max_concurrent = int(args[i + 1])
+                if max_concurrent < 1:
+                    print("Error: --concurrency must be at least 1")
+                    sys.exit(1)
+            except ValueError:
+                print(f"Error: --concurrency requires a number, got: {args[i + 1]}")
+                sys.exit(1)
             i += 2
         elif arg == "--help" or arg == "-h":
             print_usage()
@@ -65,7 +80,9 @@ def parse_args(args: list[str]) -> ParsedArgs:
             message_links.append(arg)
             i += 1
 
-    return ParsedArgs(message_links=message_links, output_dir=output_dir)
+    return ParsedArgs(
+        message_links=message_links, output_dir=output_dir, max_concurrent=max_concurrent
+    )
 
 
 def print_usage() -> None:
@@ -75,8 +92,9 @@ def print_usage() -> None:
     print("Download videos from Telegram message links (including private channels).")
     print()
     print("Options:")
-    print("  --out <dir>     Output directory (default: output_dir)")
-    print("  --help, -h      Show this help message")
+    print("  --out <dir>         Output directory (default: output_dir)")
+    print("  --concurrency, -j   Max concurrent downloads (default: 5)")
+    print("  --help, -h          Show this help message")
     print()
     print("Examples:")
     print("  # Download single video")
@@ -87,6 +105,9 @@ def print_usage() -> None:
     print()
     print("  # Download multiple videos")
     print('  uv run telegram_download.py "https://t.me/ch1/123" "https://t.me/ch2/456"')
+    print()
+    print("  # Download with 10 concurrent downloads")
+    print('  uv run telegram_download.py "https://t.me/ch1/123" "https://t.me/ch2/456" -j 10')
     print()
     print("  # Custom output directory")
     print('  uv run telegram_download.py "https://t.me/channel/123" --out ./downloads')
@@ -166,86 +187,104 @@ def get_video_filename(message: Message, channel_title: str) -> str:
     return f"{safe_title}_{message.id}.{ext}"
 
 
+@dataclass
+class DownloadResult:
+    """Result of a download operation."""
+
+    url: str
+    success: bool
+    filename: str
+    error: Optional[str] = None
+
+
 async def download_video_async(
     client: TelegramClient,
+    url: str,
     link: ParsedLink,
     output_dir: Path,
-) -> bool:
+    semaphore: asyncio.Semaphore,
+    task_id: int,
+    total_tasks: int,
+) -> DownloadResult:
     """Download video from a Telegram message."""
-    try:
-        # Get the message
-        message = await client.get_messages(link.channel_id, ids=link.message_id)
-
-        if message is None:
-            print(f"  Error: Message not found (ID: {link.message_id})")
-            return False
-
-        # Check if message has video/document media
-        if not message.media:
-            print(f"  Error: Message has no media")
-            return False
-
-        # Get video size for progress bar
-        file_size = 0
-        if isinstance(message.media, MessageMediaDocument):
-            doc = message.media.document
-            if doc:
-                file_size = doc.size
-        elif hasattr(message.media, "video"):
-            video = message.media.video
-            if video:
-                file_size = video.size
-
-        if file_size == 0:
-            print(f"  Warning: Could not determine file size")
-
-        # Get channel info for filename
+    async with semaphore:
         try:
-            entity = await client.get_entity(link.channel_id)
-            channel_title = getattr(entity, "title", None) or getattr(
-                entity, "username", None
-            ) or str(link.channel_id)
-        except Exception:
-            channel_title = str(link.channel_id)
+            # Get the message
+            message = await client.get_messages(link.channel_id, ids=link.message_id)
 
-        # Generate filename
-        filename = get_video_filename(message, channel_title)
-        output_path = output_dir / filename
+            if message is None:
+                return DownloadResult(
+                    url=url,
+                    success=False,
+                    filename="",
+                    error=f"Message not found (ID: {link.message_id})",
+                )
 
-        # Check if file already exists
-        if output_path.exists():
-            print(f"  File already exists: {filename}")
-            return True
+            # Check if message has video/document media
+            if not message.media:
+                return DownloadResult(
+                    url=url, success=False, filename="", error="Message has no media"
+                )
 
-        print(f"  Downloading: {filename}")
-        if file_size > 0:
-            print(f"  Size: {file_size / (1024 * 1024):.1f} MB")
+            # Get video size for progress bar
+            file_size = 0
+            if isinstance(message.media, MessageMediaDocument):
+                doc = message.media.document
+                if doc:
+                    file_size = doc.size
+            elif hasattr(message.media, "video"):
+                video = message.media.video
+                if video:
+                    file_size = video.size
 
-        # Download with progress bar
-        with tqdm(
-            total=file_size,
-            unit="B",
-            unit_scale=True,
-            unit_divisor=1024,
-            desc="  Progress",
-            leave=True,
-        ) as pbar:
+            # Get channel info for filename
+            try:
+                entity = await client.get_entity(link.channel_id)
+                channel_title = (
+                    getattr(entity, "title", None)
+                    or getattr(entity, "username", None)
+                    or str(link.channel_id)
+                )
+            except Exception:
+                channel_title = str(link.channel_id)
 
-            def progress_callback(current: int, total: int) -> None:
-                pbar.update(current - pbar.n)
+            # Generate filename
+            filename = get_video_filename(message, channel_title)
+            output_path = output_dir / filename
 
-            await client.download_media(
-                message,
-                file=str(output_path),
-                progress_callback=progress_callback,
+            # Check if file already exists
+            if output_path.exists():
+                return DownloadResult(url=url, success=True, filename=filename)
+
+            # Download with progress bar
+            size_str = (
+                f"{file_size / (1024 * 1024):.1f}MB" if file_size > 0 else "unknown"
             )
+            desc = f"[{task_id}/{total_tasks}] {filename[:30]}... ({size_str})"
 
-        print(f"  Saved to: {output_path}")
-        return True
+            with tqdm(
+                total=file_size,
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+                desc=desc,
+                leave=True,
+                position=None,
+            ) as pbar:
 
-    except Exception as e:
-        print(f"  Error downloading: {e}")
-        return False
+                def progress_callback(current: int, total: int) -> None:
+                    pbar.update(current - pbar.n)
+
+                await client.download_media(
+                    message,
+                    file=str(output_path),
+                    progress_callback=progress_callback,
+                )
+
+            return DownloadResult(url=url, success=True, filename=filename)
+
+        except Exception as e:
+            return DownloadResult(url=url, success=False, filename="", error=str(e))
 
 
 async def main_async() -> None:
@@ -337,21 +376,44 @@ async def main_async() -> None:
             print(client.session.save())
             print()
 
-        # Download each video
-        success_count = 0
-        fail_count = 0
+        # Create semaphore for concurrent downloads
+        semaphore = asyncio.Semaphore(parsed.max_concurrent)
+        print(f"Max concurrent downloads: {parsed.max_concurrent}")
+        print()
 
-        for i, (url, link) in enumerate(links, 1):
-            print(f"[{i}/{len(links)}] {url}")
-            if await download_video_async(client, link, parsed.output_dir):
-                success_count += 1
-            else:
-                fail_count += 1
-            print()
+        # Create download tasks
+        tasks = [
+            download_video_async(
+                client,
+                url,
+                link,
+                parsed.output_dir,
+                semaphore,
+                i,
+                len(links),
+            )
+            for i, (url, link) in enumerate(links, 1)
+        ]
 
-        # Summary
+        # Run all downloads concurrently (limited by semaphore)
+        results: list[DownloadResult] = await asyncio.gather(*tasks)
+
+        # Print summary
+        print()
         print("=" * 50)
+        success_count = sum(1 for r in results if r.success)
+        fail_count = sum(1 for r in results if not r.success)
         print(f"Download complete: {success_count} succeeded, {fail_count} failed")
+
+        # Print failed downloads if any
+        failed = [r for r in results if not r.success]
+        if failed:
+            print()
+            print("Failed downloads:")
+            for r in failed:
+                print(f"  - {r.url}")
+                if r.error:
+                    print(f"    Error: {r.error}")
 
     except KeyboardInterrupt:
         print("\n\nDownload cancelled by user")
