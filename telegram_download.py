@@ -20,6 +20,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFilename
+from telethon.tl.functions.messages import GetDiscussionMessageRequest
 from tqdm import tqdm
 from typeguard import typechecked
 
@@ -39,6 +40,7 @@ class ParsedLink:
 
     channel_id: Union[int, str]  # int for private (-100xxx), str for public username
     message_id: int
+    comment_id: Optional[int] = None  # Comment ID for discussion replies
 
 
 @typechecked
@@ -103,6 +105,9 @@ def print_usage() -> None:
     print("  # Download from private channel")
     print('  uv run telegram_download.py "https://t.me/c/1234567890/456"')
     print()
+    print("  # Download video from a comment/reply")
+    print('  uv run telegram_download.py "https://t.me/channel_name/123?comment=456"')
+    print()
     print("  # Download multiple videos")
     print('  uv run telegram_download.py "https://t.me/ch1/123" "https://t.me/ch2/456"')
     print()
@@ -125,6 +130,7 @@ def print_usage() -> None:
     print("Message Link Formats:")
     print("  Public channel:  https://t.me/channel_name/12345")
     print("  Private channel: https://t.me/c/1234567890/12345")
+    print("  Comment/Reply:   https://t.me/channel_name/12345?comment=67890")
 
 
 @typechecked
@@ -133,25 +139,44 @@ def parse_message_link(url: str) -> Optional[ParsedLink]:
 
     Supports:
     - Public channels: https://t.me/channel_name/12345
+    - Public channel comments: https://t.me/channel_name/12345?comment=67890
     - Private channels: https://t.me/c/1234567890/12345
+    - Private channel comments: https://t.me/c/1234567890/12345?comment=67890
     """
+    # Extract comment ID if present
+    comment_id: Optional[int] = None
+    comment_match = re.search(r"[?&]comment=(\d+)", url)
+    if comment_match:
+        comment_id = int(comment_match.group(1))
+
+    # Remove query parameters for pattern matching
+    base_url = re.sub(r"\?.*$", "", url)
+
     # Pattern for private channels: https://t.me/c/CHANNEL_ID/MESSAGE_ID
     private_pattern = r"https?://t\.me/c/(\d+)/(\d+)"
-    private_match = re.match(private_pattern, url)
+    private_match = re.match(private_pattern, base_url)
     if private_match:
         channel_id = private_match.group(1)
         message_id = int(private_match.group(2))
         # Convert to the format Telethon expects for private channels
         # Private channel IDs need -100 prefix (e.g., 1234567890 -> -1001234567890)
-        return ParsedLink(channel_id=int(f"-100{channel_id}"), message_id=message_id)
+        return ParsedLink(
+            channel_id=int(f"-100{channel_id}"),
+            message_id=message_id,
+            comment_id=comment_id,
+        )
 
     # Pattern for public channels: https://t.me/channel_name/MESSAGE_ID
     public_pattern = r"https?://t\.me/([a-zA-Z][a-zA-Z0-9_]{3,30}[a-zA-Z0-9])/(\d+)"
-    public_match = re.match(public_pattern, url)
+    public_match = re.match(public_pattern, base_url)
     if public_match:
         channel_name = public_match.group(1)
         message_id = int(public_match.group(2))
-        return ParsedLink(channel_id=channel_name, message_id=message_id)
+        return ParsedLink(
+            channel_id=channel_name,
+            message_id=message_id,
+            comment_id=comment_id,
+        )
 
     return None
 
@@ -197,6 +222,7 @@ class DownloadResult:
     error: Optional[str] = None
 
 
+@typechecked
 async def download_video_async(
     client: TelegramClient,
     url: str,
@@ -209,15 +235,50 @@ async def download_video_async(
     """Download video from a Telegram message."""
     async with semaphore:
         try:
-            # Get the message
-            message = await client.get_messages(link.channel_id, ids=link.message_id)
+            # Get the message (or comment if comment_id is specified)
+            if link.comment_id is not None:
+                # For comments, we need to get the discussion group first
+                try:
+                    # Get the entity for the channel
+                    channel_entity = await client.get_entity(link.channel_id)
+
+                    # Get discussion message info using the raw API
+                    result = await client(
+                        GetDiscussionMessageRequest(
+                            peer=channel_entity, msg_id=link.message_id
+                        )
+                    )
+
+                    if not result.messages:
+                        return DownloadResult(
+                            url=url,
+                            success=False,
+                            filename="",
+                            error="Discussion not found for this message",
+                        )
+
+                    # The discussion group is where comments live
+                    # Get the comment by its ID from the discussion group
+                    discussion_chat_id = result.messages[0].peer_id
+                    message = await client.get_messages(
+                        discussion_chat_id, ids=link.comment_id
+                    )
+                except Exception as e:
+                    return DownloadResult(
+                        url=url,
+                        success=False,
+                        filename="",
+                        error=f"Failed to get comment: {e}",
+                    )
+            else:
+                message = await client.get_messages(link.channel_id, ids=link.message_id)
 
             if message is None:
                 return DownloadResult(
                     url=url,
                     success=False,
                     filename="",
-                    error=f"Message not found (ID: {link.message_id})",
+                    error=f"Message not found (ID: {link.comment_id or link.message_id})",
                 )
 
             # Check if message has video/document media
@@ -230,11 +291,11 @@ async def download_video_async(
             file_size = 0
             if isinstance(message.media, MessageMediaDocument):
                 doc = message.media.document
-                if doc:
+                if doc and doc.size:
                     file_size = doc.size
             elif hasattr(message.media, "video"):
                 video = message.media.video
-                if video:
+                if video and video.size:
                     file_size = video.size
 
             # Get channel info for filename
@@ -252,18 +313,29 @@ async def download_video_async(
             filename = get_video_filename(message, channel_title)
             output_path = output_dir / filename
 
-            # Check if file already exists
+            # Check for existing partial download (resume support)
+            existing_size = 0
             if output_path.exists():
-                return DownloadResult(url=url, success=True, filename=filename)
+                existing_size = output_path.stat().st_size
+                if file_size > 0 and existing_size >= file_size:
+                    # File already fully downloaded
+                    return DownloadResult(url=url, success=True, filename=filename)
 
-            # Download with progress bar
-            size_str = (
-                f"{file_size / (1024 * 1024):.1f}MB" if file_size > 0 else "unknown"
-            )
-            desc = f"[{task_id}/{total_tasks}] {filename[:30]}... ({size_str})"
+            # Prepare progress bar description
+            if file_size > 0:
+                size_str = f"{file_size / (1024 * 1024):.1f}MB"
+                if existing_size > 0:
+                    existing_str = f"{existing_size / (1024 * 1024):.1f}MB"
+                    desc = f"[{task_id}/{total_tasks}] {filename[:25]}... (resume {existing_str}/{size_str})"
+                else:
+                    desc = f"[{task_id}/{total_tasks}] {filename[:30]}... ({size_str})"
+            else:
+                desc = f"[{task_id}/{total_tasks}] {filename[:30]}... (unknown size)"
 
+            # Download with resume support using iter_download
             with tqdm(
-                total=file_size,
+                total=file_size if file_size > 0 else None,
+                initial=existing_size,
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
@@ -271,15 +343,15 @@ async def download_video_async(
                 leave=True,
                 position=None,
             ) as pbar:
-
-                def progress_callback(current: int, total: int) -> None:
-                    pbar.update(current - pbar.n)
-
-                await client.download_media(
-                    message,
-                    file=str(output_path),
-                    progress_callback=progress_callback,
-                )
+                # Use append mode for resume, write mode for new downloads
+                mode = "ab" if existing_size > 0 else "wb"
+                with open(output_path, mode) as f:
+                    async for chunk in client.iter_download(
+                        message.media,
+                        offset=existing_size,
+                    ):
+                        f.write(chunk)
+                        pbar.update(len(chunk))
 
             return DownloadResult(url=url, success=True, filename=filename)
 
