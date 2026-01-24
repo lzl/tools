@@ -342,7 +342,7 @@ def download_audio(
 
 def split_audio(audio_path: Path, segments_dir: Path) -> list[Path]:
     """
-    Split audio file into segments using split_audio.py tool.
+    Split audio file into segments using split_media.py tool.
     
     Args:
         audio_path: Path to the audio file to split
@@ -353,15 +353,15 @@ def split_audio(audio_path: Path, segments_dir: Path) -> list[Path]:
     """
     print("\n=== Step 3: Splitting audio into segments ===")
     
-    # Get the script directory to find split_audio.py
+    # Get the script directory to find split_media.py
     script_dir = Path(__file__).parent
-    split_audio_script = script_dir / "split_audio.py"
+    split_media_script = script_dir / "split_media.py"
     
-    if not split_audio_script.exists():
-        raise FileNotFoundError(f"split_audio.py not found at {split_audio_script}")
+    if not split_media_script.exists():
+        raise FileNotFoundError(f"split_media.py not found at {split_media_script}")
     
     cmd = [
-        "uv", "run", str(split_audio_script),
+        "uv", "run", str(split_media_script),
         str(audio_path),
         str(SEGMENT_SECONDS),
         str(segments_dir)
