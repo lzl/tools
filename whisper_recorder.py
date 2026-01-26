@@ -85,14 +85,14 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     return audio.astype(np.float32)
 
 
-def transcribe_with_groq(audio_path: Path, api_key: str, language: str = "zh", max_retries: int = 3) -> str | None:
+def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = None, max_retries: int = 3) -> str | None:
     """
     调用 Groq Whisper API 转录音频，返回纯文本。
 
     Args:
         audio_path: 音频文件路径
         api_key: Groq API Key
-        language: 语言代码（默认 "zh" 中文）
+        language: 语言代码（如 "zh", "en"），None 表示自动检测
         max_retries: 最大重试次数（针对 429/5xx 错误）
 
     Returns:
@@ -108,8 +108,9 @@ def transcribe_with_groq(audio_path: Path, api_key: str, language: str = "zh", m
                 data = {
                     "model": "whisper-large-v3-turbo",
                     "response_format": "text",
-                    "language": language,
                 }
+                if language:
+                    data["language"] = language
                 response = requests.post(url, headers=headers, files=files, data=data, timeout=60)
 
             if response.status_code == 200:
@@ -211,7 +212,8 @@ class WhisperRecorder:
         api_key = os.getenv("GROQ_API_KEY")
         if api_key:
             print("Transcribing with Groq Whisper API...")
-            transcript = transcribe_with_groq(output_path, api_key)
+            language = os.getenv("WHISPER_LANGUAGE")  # None if not set
+            transcript = transcribe_with_groq(output_path, api_key, language=language)
             if transcript:
                 md_path = output_path.with_suffix(".md")
                 md_path.write_text(transcript, encoding="utf-8")
