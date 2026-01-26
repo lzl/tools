@@ -155,12 +155,16 @@ def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3
 
 Rules:
 1. Keep the SAME language as the original - do NOT translate
-2. Fix obvious transcription errors (typos, misheard words, technical terms) - make corrections directly without any notes or explanations
-3. Organize into clear structure (headings, numbered/bulleted lists, paragraphs)
+2. Fix obvious transcription errors directly without any notes or explanations
+3. Organize into clear hierarchical structure:
+   - Use headings for major sections
+   - Use numbered lists for sequential items or steps
+   - Use sub-items (a, b, c) when a point has multiple supporting details or explanations
+   - Put supplementary information in parentheses (e.g., optional settings, minor clarifications)
 4. Make sentences flow more naturally while preserving the original meaning
 5. Do NOT add any content that wasn't in the original
 6. Do NOT overuse formatting - avoid excessive bold, italics, or emphasis
-7. Output ONLY the final polished text - no comments, notes, explanations, or annotations
+7. Output ONLY the final polished text - no comments, notes, or annotations
 
 Original transcript:
 {raw_text}
