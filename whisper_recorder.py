@@ -12,13 +12,16 @@
 
 """A command-line tool for recording whisper/low-volume audio with enhancement for Whisper transcription"""
 
+import logging
 import os
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
+from typing import Any, Callable, TypeVar
 
 import numpy as np
 import requests
@@ -27,14 +30,67 @@ import sounddevice as sd
 from scipy.io import wavfile
 from scipy.signal import butter, sosfilt
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+T = TypeVar("T")
+
+
+def retry_with_backoff(
+    max_retries: int = 3,
+    retryable_exceptions: tuple[type[Exception], ...] = (Exception,),
+    on_retry: Callable[[Exception, int], None] | None = None,
+) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
+    """
+    通用重试装饰器，支持指数退避。
+
+    Args:
+        max_retries: 最大重试次数
+        retryable_exceptions: 可重试的异常类型
+        on_retry: 重试时的回调函数，接收 (exception, attempt) 参数
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T | None]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T | None:
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except retryable_exceptions as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        if on_retry:
+                            on_retry(e, attempt)
+                        else:
+                            logger.warning(f"Error: {e}, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Max retries exceeded: {e}")
+                        return None
+            return None
+        return wrapper
+    return decorator
+
 
 # Audio settings optimized for Whisper
 SAMPLE_RATE = 16000  # Whisper's preferred sample rate
 CHANNELS = 1
 DTYPE = np.float32
 
-# Output directory
-OUTPUT_DIR = Path("output_dir")
+# Audio enhancement settings
+HIGHPASS_FREQ = 80  # Hz, remove low-frequency rumble
+TARGET_RMS_DB = -18  # dB, target loudness for normalization
+MAX_GAIN = 20.0  # Maximum amplification to prevent noise boost
+SOFT_LIMIT_THRESHOLD = 0.7  # Soft clipping threshold
+PEAK_NORMALIZE_TARGET = 0.95  # Peak normalization target
+
+# Output directory (default: ~/whisper_recordings)
+OUTPUT_DIR = Path.home() / "whisper_recordings"
 
 
 def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
@@ -50,23 +106,22 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     if audio.size == 0:
         return audio
 
-    # 1. High-pass filter at 80 Hz to remove rumble
-    sos_hp = butter(2, 80, btype='highpass', fs=sample_rate, output='sos')
+    # 1. High-pass filter to remove rumble
+    sos_hp = butter(2, HIGHPASS_FREQ, btype='highpass', fs=sample_rate, output='sos')
     audio = sosfilt(sos_hp, audio).astype(np.float32)
 
     # 2. Adaptive RMS normalization
-    # Target: -18 dB RMS (less aggressive than -15 dB)
-    target_rms = 10 ** (-18 / 20)  # ~0.126
+    target_rms = 10 ** (TARGET_RMS_DB / 20)
     current_rms = np.sqrt(np.mean(audio ** 2))
     if current_rms > 1e-6:
         gain = target_rms / current_rms
         # Limit gain to prevent over-amplification of noise
-        gain = min(gain, 20.0)
+        gain = min(gain, MAX_GAIN)
         audio = audio * gain
 
     # 3. Soft limiting using smooth curve (better than tanh for speech)
     # This preserves more dynamics than tanh
-    threshold = 0.7
+    threshold = SOFT_LIMIT_THRESHOLD
     audio_abs = np.abs(audio)
     audio_sign = np.sign(audio)
 
@@ -79,10 +134,10 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     )
     audio = audio_sign * compressed
 
-    # 4. Peak normalization to 0.95
+    # 4. Peak normalization
     peak = np.max(np.abs(audio))
     if peak > 1e-6:
-        audio = audio * (0.95 / peak)
+        audio = audio * (PEAK_NORMALIZE_TARGET / peak)
 
     return audio.astype(np.float32)
 
@@ -120,30 +175,29 @@ def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = 
             elif response.status_code == 429 or response.status_code >= 500:
                 # 可重试的错误
                 wait_time = 2 ** attempt
-                print(f"API error {response.status_code}, retrying in {wait_time}s...")
+                logger.warning(f"API error {response.status_code}, retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
-                print(f"Transcription failed: {response.status_code} - {response.text}")
+                logger.error(f"Transcription failed: HTTP {response.status_code}")
                 return None
         except requests.RequestException as e:
-            print(f"Request error: {e}")
+            logger.error(f"Request error: {e}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
                 return None
 
-    print("Max retries exceeded")
+    logger.error("Max retries exceeded")
     return None
 
 
-def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3) -> str | None:
+def polish_transcript_with_llm(raw_text: str, api_key: str) -> str | None:
     """
     使用 Gemini 优化转录文本。
 
     Args:
         raw_text: 原始转录文本
         api_key: Gemini API Key
-        max_retries: 最大重试次数
 
     Returns:
         优化后的文本，失败时返回 None
@@ -173,23 +227,19 @@ Original transcript:
 
 Output the polished text directly."""
 
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-lite-preview-09-2025",
-                contents=[prompt.format(raw_text=raw_text)],
-            )
-            return response.text
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                print(f"LLM error: {e}, retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                print(f"LLM polish failed: {e}")
-                return None
+    @retry_with_backoff(
+        max_retries=3,
+        retryable_exceptions=(Exception,),
+        on_retry=lambda e, _: logger.warning(f"LLM error: {e}, retrying..."),
+    )
+    def _call_llm() -> str:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite-preview-09-2025",
+            contents=[prompt.format(raw_text=raw_text)],
+        )
+        return response.text
 
-    return None
+    return _call_llm()
 
 
 class WhisperRecorder:
@@ -199,26 +249,28 @@ class WhisperRecorder:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.is_recording = False
+        self._recording_event = threading.Event()  # 线程安全的录音状态
         self.audio_data: list[np.ndarray] = []
         self.stream: sd.InputStream | None = None
         self._lock = threading.Lock()
 
-    def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status):
+    def _audio_callback(
+        self, indata: np.ndarray, frames: int, time_info: Any, status: sd.CallbackFlags | None
+    ) -> None:
         """Callback function for audio stream"""
         if status:
-            print(f"Audio status: {status}", file=sys.stderr)
-        if self.is_recording:
+            logger.warning(f"Audio status: {status}")
+        if self._recording_event.is_set():
             with self._lock:
                 self.audio_data.append(indata.copy())
 
     def start_recording(self):
         """Start recording audio"""
-        if self.is_recording:
+        if self._recording_event.is_set():
             return
 
         self.audio_data = []
-        self.is_recording = True
+        self._recording_event.set()
 
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -231,28 +283,30 @@ class WhisperRecorder:
 
     def stop_recording(self) -> tuple[Path, Path | None, Path | None] | None:
         """Stop recording, save the audio file, and transcribe with Groq API"""
-        if not self.is_recording:
+        if not self._recording_event.is_set():
             return None
 
-        self.is_recording = False
+        self._recording_event.clear()
 
         if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+            try:
+                self.stream.stop()
+            finally:
+                self.stream.close()
+                self.stream = None
 
         with self._lock:
             if not self.audio_data:
-                print("No audio data recorded")
+                logger.warning("No audio data recorded")
                 return None
 
             # Concatenate all audio chunks
             audio = np.concatenate(self.audio_data, axis=0).flatten()
 
-        print(f"Recorded {len(audio) / SAMPLE_RATE:.2f} seconds of audio")
+        logger.info(f"Recorded {len(audio) / SAMPLE_RATE:.2f} seconds of audio")
 
         # Enhance the audio for whisper recognition
-        print("Enhancing audio for whisper recognition...")
+        logger.info("Enhancing audio for whisper recognition...")
         enhanced_audio = enhance_whisper_audio(audio)
 
         # Generate output filename with timestamp
@@ -264,31 +318,31 @@ class WhisperRecorder:
         audio_int16 = (enhanced_audio * 32767).astype(np.int16)
         wavfile.write(wav_path, SAMPLE_RATE, audio_int16)
 
-        print(f"[1/3] Audio saved to: {wav_path}")
+        logger.info(f"[1/3] Audio saved to: {wav_path}")
 
         # Transcribe with Groq API
         raw_md_path = None
         polished_md_path = None
         api_key = os.getenv("GROQ_API_KEY")
         if api_key:
-            print("Transcribing with Groq Whisper API...")
+            logger.info("Transcribing with Groq Whisper API...")
             language = os.getenv("WHISPER_LANGUAGE")  # None if not set
             transcript = transcribe_with_groq(wav_path, api_key, language=language)
             if transcript:
                 # 保存原始转录文本
                 raw_md_path = self.output_dir / f"{base_name}.md"
                 raw_md_path.write_text(transcript, encoding="utf-8")
-                print(f"[2/3] Raw transcript saved to: {raw_md_path}")
+                logger.info(f"[2/3] Raw transcript saved to: {raw_md_path}")
 
                 # LLM 优化
                 gemini_key = os.getenv("GEMINI_API_KEY")
                 if gemini_key:
-                    print("Polishing transcript with LLM...")
+                    logger.info("Polishing transcript with LLM...")
                     polished = polish_transcript_with_llm(transcript, gemini_key)
                     if polished:
                         polished_md_path = self.output_dir / f"{base_name}_polished.md"
                         polished_md_path.write_text(polished, encoding="utf-8")
-                        print(f"[3/3] Polished transcript saved to: {polished_md_path}")
+                        logger.info(f"[3/3] Polished transcript saved to: {polished_md_path}")
 
                         # Display result
                         print("\n" + "=" * 50)
@@ -297,26 +351,47 @@ class WhisperRecorder:
                         print(polished)
                         print("=" * 50)
 
-                        # Copy to clipboard (macOS)
+                        # Copy to clipboard (cross-platform)
                         try:
-                            subprocess.run(
-                                ["pbcopy"],
-                                input=polished.encode("utf-8"),
-                                check=True,
-                            )
-                            print("Copied to clipboard!")
+                            if sys.platform == "darwin":
+                                subprocess.run(
+                                    ["pbcopy"],
+                                    input=polished.encode("utf-8"),
+                                    check=True,
+                                )
+                            elif sys.platform == "win32":
+                                subprocess.run(
+                                    ["clip"],
+                                    input=polished.encode("utf-16"),
+                                    check=True,
+                                )
+                            else:  # Linux/Unix
+                                # Try xclip first, then xsel
+                                try:
+                                    subprocess.run(
+                                        ["xclip", "-selection", "clipboard"],
+                                        input=polished.encode("utf-8"),
+                                        check=True,
+                                    )
+                                except FileNotFoundError:
+                                    subprocess.run(
+                                        ["xsel", "--clipboard", "--input"],
+                                        input=polished.encode("utf-8"),
+                                        check=True,
+                                    )
+                            logger.info("Copied to clipboard!")
                         except (subprocess.CalledProcessError, FileNotFoundError):
-                            print("Failed to copy to clipboard")
+                            logger.warning("Failed to copy to clipboard")
                     else:
-                        print("[3/3] LLM polish failed, skipped")
+                        logger.warning("[3/3] LLM polish failed, skipped")
                 else:
-                    print("[3/3] GEMINI_API_KEY not set, skipping LLM polish")
+                    logger.info("[3/3] GEMINI_API_KEY not set, skipping LLM polish")
             else:
-                print("[2/3] Transcription failed")
-                print("[3/3] Skipped (no transcript)")
+                logger.warning("[2/3] Transcription failed")
+                logger.info("[3/3] Skipped (no transcript)")
         else:
-            print("[2/3] GROQ_API_KEY not set, skipping transcription")
-            print("[3/3] Skipped (no transcript)")
+            logger.info("[2/3] GROQ_API_KEY not set, skipping transcription")
+            logger.info("[3/3] Skipped (no transcript)")
 
         return (wav_path, raw_md_path, polished_md_path)
 
@@ -327,7 +402,6 @@ def main():
 
     load_dotenv()
     recorder = WhisperRecorder()
-    running = True
 
     print("=" * 50)
     print("Whisper Recorder")
@@ -339,23 +413,22 @@ def main():
     print("\nReady. Press SPACE to start recording...")
 
     def on_press(key):
-        nonlocal running
-
         try:
             if key == keyboard.Key.space:
-                if recorder.is_recording:
+                if recorder._recording_event.is_set():
                     recorder.stop_recording()
                     print("\nReady. Press SPACE to start recording...")
                 else:
                     recorder.start_recording()
             elif key == keyboard.Key.esc:
-                if recorder.is_recording:
+                if recorder._recording_event.is_set():
                     recorder.stop_recording()
-                running = False
                 print("\nExiting...")
                 return False  # Stop listener
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
+        except (OSError, IOError) as e:
+            logger.error(f"I/O error: {e}")
+        except requests.RequestException as e:
+            logger.error(f"Network error: {e}")
 
     # Start keyboard listener
     with keyboard.Listener(on_press=on_press) as listener:
