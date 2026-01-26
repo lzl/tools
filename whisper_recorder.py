@@ -152,20 +152,21 @@ def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3
 
     client = genai.Client(api_key=api_key)
 
-    prompt = """You are a professional text editor. Polish the following speech transcript.
+    prompt = """You are a professional text editor. Transform the following speech transcript into well-structured written text.
 
 Rules:
 1. Keep the SAME language as the original - do NOT translate
-2. Do NOT delete any content from the original - preserve all information
-3. Fix obvious transcription errors directly without any notes
-4. Add proper punctuation and spacing:
-   - For Chinese text: add spaces around numbers (e.g., "共 65 亿" not "共65亿")
-   - Add appropriate punctuation marks (commas, periods, colons)
-5. Separate unrelated topics into different paragraphs with blank lines
-6. Only use structured formatting (headings, lists) when the original content clearly implies such structure (e.g., "first, second, third" or explicit enumeration)
-7. Do NOT add headings or titles that weren't implied in the original
-8. Make sentences flow more naturally while preserving the original meaning
-9. Output ONLY the final polished text - no comments or annotations
+2. Convert spoken language to written language:
+   - Remove filler words (e.g., "um", "uh", "like", "you know", Chinese: "嗯", "那个", "就是", "对对对")
+   - Transform colloquial expressions into formal written style
+   - Fix transcription errors (misheard words, typos)
+3. Reorganize content logically:
+   - Group related information together
+   - Separate different topics into paragraphs with blank lines
+   - Use numbered lists when content describes steps, features, or multiple points
+4. Preserve ALL substantive information - only remove verbal fillers, not actual content
+5. Add proper punctuation and spacing (for Chinese: add spaces around numbers)
+6. Output ONLY the final polished text - no comments or annotations
 
 Original transcript:
 {raw_text}
