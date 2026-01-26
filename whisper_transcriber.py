@@ -48,12 +48,12 @@ def retry_with_backoff(
     on_retry: Callable[[Exception, int], None] | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T | None]]:
     """
-    通用重试装饰器，支持指数退避。
+    Generic retry decorator with exponential backoff.
 
     Args:
-        max_retries: 最大重试次数
-        retryable_exceptions: 可重试的异常类型
-        on_retry: 重试时的回调函数，接收 (exception, attempt) 参数
+        max_retries: Maximum number of retry attempts
+        retryable_exceptions: Exception types that trigger a retry
+        on_retry: Callback function on retry, receives (exception, attempt)
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T | None]:
         @wraps(func)
@@ -144,16 +144,16 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
 
 def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = None, max_retries: int = 3) -> str | None:
     """
-    调用 Groq Whisper API 转录音频，返回纯文本。
+    Call Groq Whisper API to transcribe audio, returns plain text.
 
     Args:
-        audio_path: 音频文件路径
+        audio_path: Path to the audio file
         api_key: Groq API Key
-        language: 语言代码（如 "zh", "en"），None 表示自动检测
-        max_retries: 最大重试次数（针对 429/5xx 错误）
+        language: Language code (e.g., "zh", "en"), None for auto-detection
+        max_retries: Maximum retry attempts (for 429/5xx errors)
 
     Returns:
-        转录文本，失败时返回 None
+        Transcribed text, or None on failure
     """
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -173,7 +173,7 @@ def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = 
             if response.status_code == 200:
                 return response.text.strip()
             elif response.status_code == 429 or response.status_code >= 500:
-                # 可重试的错误
+                # Retryable errors
                 wait_time = 2 ** attempt
                 logger.warning(f"API error {response.status_code}, retrying in {wait_time}s...")
                 time.sleep(wait_time)
@@ -193,14 +193,14 @@ def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = 
 
 def polish_transcript_with_llm(raw_text: str, api_key: str) -> str | None:
     """
-    使用 Gemini 优化转录文本。
+    Polish transcript text using Gemini LLM.
 
     Args:
-        raw_text: 原始转录文本
+        raw_text: Raw transcript text
         api_key: Gemini API Key
 
     Returns:
-        优化后的文本，失败时返回 None
+        Polished text, or None on failure
     """
     from google import genai
 
@@ -211,7 +211,7 @@ def polish_transcript_with_llm(raw_text: str, api_key: str) -> str | None:
 Rules:
 1. Keep the SAME language as the original - do NOT translate
 2. Convert spoken language to written language:
-   - Remove filler words (e.g., "um", "uh", "like", "you know", Chinese: "嗯", "那个", "就是", "对对对")
+   - Remove filler words (e.g., "um", "uh", "like", "you know", or equivalents in other languages)
    - Transform colloquial expressions into formal written style
    - Fix transcription errors (misheard words, typos)
 3. Reorganize content logically:
@@ -219,7 +219,7 @@ Rules:
    - Separate different topics into paragraphs with blank lines
    - Use numbered lists when content describes steps, features, or multiple points
 4. Preserve ALL substantive information - only remove verbal fillers, not actual content
-5. Add proper punctuation and spacing (for Chinese: add spaces around numbers)
+5. Add proper punctuation and spacing
 6. Output ONLY the final polished text - no comments or annotations
 
 Original transcript:
@@ -242,14 +242,14 @@ Output the polished text directly."""
     return _call_llm()
 
 
-class WhisperRecorder:
-    """Audio recorder optimized for whisper/low-volume speech"""
+class WhisperTranscriber:
+    """Audio recorder and transcriber optimized for whisper/low-volume speech"""
 
     def __init__(self, output_dir: Path = OUTPUT_DIR):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self._recording_event = threading.Event()  # 线程安全的录音状态
+        self._recording_event = threading.Event()  # Thread-safe recording state
         self.audio_data: list[np.ndarray] = []
         self.stream: sd.InputStream | None = None
         self._lock = threading.Lock()
@@ -329,12 +329,12 @@ class WhisperRecorder:
             language = os.getenv("WHISPER_LANGUAGE")  # None if not set
             transcript = transcribe_with_groq(wav_path, api_key, language=language)
             if transcript:
-                # 保存原始转录文本
+                # Save raw transcript
                 raw_md_path = self.output_dir / f"{base_name}.md"
                 raw_md_path.write_text(transcript, encoding="utf-8")
                 logger.info(f"[2/3] Raw transcript saved to: {raw_md_path}")
 
-                # LLM 优化
+                # LLM polishing
                 gemini_key = os.getenv("GEMINI_API_KEY")
                 if gemini_key:
                     logger.info("Polishing transcript with LLM...")
@@ -401,10 +401,10 @@ def main():
     from pynput import keyboard
 
     load_dotenv()
-    recorder = WhisperRecorder()
+    recorder = WhisperTranscriber()
 
     print("=" * 50)
-    print("Whisper Recorder")
+    print("Whisper Transcriber")
     print("=" * 50)
     print("Controls:")
     print("  SPACE - Start/Stop recording")
