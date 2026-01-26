@@ -4,17 +4,23 @@
 #   "numpy",
 #   "scipy",
 #   "pynput",
+#   "requests",
+#   "python-dotenv",
 # ]
 # ///
 
 """A command-line tool for recording whisper/low-volume audio with enhancement for Whisper transcription"""
 
+import os
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import requests
+from dotenv import load_dotenv
 import sounddevice as sd
 from scipy.io import wavfile
 from scipy.signal import butter, sosfilt
@@ -79,6 +85,52 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     return audio.astype(np.float32)
 
 
+def transcribe_with_groq(audio_path: Path, api_key: str, max_retries: int = 3) -> str | None:
+    """
+    调用 Groq Whisper API 转录音频，返回纯文本。
+
+    Args:
+        audio_path: 音频文件路径
+        api_key: Groq API Key
+        max_retries: 最大重试次数（针对 429/5xx 错误）
+
+    Returns:
+        转录文本，失败时返回 None
+    """
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    for attempt in range(max_retries):
+        try:
+            with open(audio_path, "rb") as f:
+                files = {"file": (audio_path.name, f, "audio/wav")}
+                data = {
+                    "model": "whisper-large-v3-turbo",
+                    "response_format": "text",
+                }
+                response = requests.post(url, headers=headers, files=files, data=data, timeout=60)
+
+            if response.status_code == 200:
+                return response.text.strip()
+            elif response.status_code == 429 or response.status_code >= 500:
+                # 可重试的错误
+                wait_time = 2 ** attempt
+                print(f"API error {response.status_code}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"Transcription failed: {response.status_code} - {response.text}")
+                return None
+        except requests.RequestException as e:
+            print(f"Request error: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                return None
+
+    print("Max retries exceeded")
+    return None
+
+
 class WhisperRecorder:
     """Audio recorder optimized for whisper/low-volume speech"""
 
@@ -116,8 +168,8 @@ class WhisperRecorder:
         self.stream.start()
         print("Recording started... (press SPACE to stop)")
 
-    def stop_recording(self) -> Path | None:
-        """Stop recording and save the audio file"""
+    def stop_recording(self) -> tuple[Path, Path | None] | None:
+        """Stop recording, save the audio file, and transcribe with Groq API"""
         if not self.is_recording:
             return None
 
@@ -151,13 +203,30 @@ class WhisperRecorder:
         wavfile.write(output_path, SAMPLE_RATE, audio_int16)
 
         print(f"Saved to: {output_path}")
-        return output_path
+
+        # Transcribe with Groq API
+        md_path = None
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key:
+            print("Transcribing with Groq Whisper API...")
+            transcript = transcribe_with_groq(output_path, api_key)
+            if transcript:
+                md_path = output_path.with_suffix(".md")
+                md_path.write_text(transcript, encoding="utf-8")
+                print(f"Transcript saved to: {md_path}")
+            else:
+                print("Transcription failed, only WAV file saved")
+        else:
+            print("Warning: GROQ_API_KEY not set, skipping transcription")
+
+        return (output_path, md_path)
 
 
 def main():
     """Main function with keyboard listener"""
     from pynput import keyboard
 
+    load_dotenv()
     recorder = WhisperRecorder()
     running = True
 
