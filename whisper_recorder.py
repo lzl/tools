@@ -156,16 +156,16 @@ def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3
 
 Rules:
 1. Keep the SAME language as the original - do NOT translate
-2. Fix obvious transcription errors directly without any notes or explanations
-3. Organize into clear hierarchical structure:
-   - Use headings for major sections
-   - Use numbered lists for sequential items or steps
-   - Use sub-items (a, b, c) when a point has multiple supporting details or explanations
-   - Put supplementary information in parentheses (e.g., optional settings, minor clarifications)
-4. Make sentences flow more naturally while preserving the original meaning
-5. Do NOT add any content that wasn't in the original
-6. Do NOT overuse formatting - avoid excessive bold, italics, or emphasis
-7. Output ONLY the final polished text - no comments, notes, or annotations
+2. Do NOT delete any content from the original - preserve all information
+3. Fix obvious transcription errors directly without any notes
+4. Add proper punctuation and spacing:
+   - For Chinese text: add spaces around numbers (e.g., "共 65 亿" not "共65亿")
+   - Add appropriate punctuation marks (commas, periods, colons)
+5. Separate unrelated topics into different paragraphs with blank lines
+6. Only use structured formatting (headings, lists) when the original content clearly implies such structure (e.g., "first, second, third" or explicit enumeration)
+7. Do NOT add headings or titles that weren't implied in the original
+8. Make sentences flow more naturally while preserving the original meaning
+9. Output ONLY the final polished text - no comments or annotations
 
 Original transcript:
 {raw_text}
