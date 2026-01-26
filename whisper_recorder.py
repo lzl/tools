@@ -13,6 +13,7 @@
 """A command-line tool for recording whisper/low-volume audio with enhancement for Whisper transcription"""
 
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -287,6 +288,24 @@ class WhisperRecorder:
                         polished_md_path = self.output_dir / f"{base_name}_polished.md"
                         polished_md_path.write_text(polished, encoding="utf-8")
                         print(f"[3/3] Polished transcript saved to: {polished_md_path}")
+
+                        # Display result
+                        print("\n" + "=" * 50)
+                        print("Polished transcript:")
+                        print("=" * 50)
+                        print(polished)
+                        print("=" * 50)
+
+                        # Copy to clipboard (macOS)
+                        try:
+                            subprocess.run(
+                                ["pbcopy"],
+                                input=polished.encode("utf-8"),
+                                check=True,
+                            )
+                            print("Copied to clipboard!")
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            print("Failed to copy to clipboard")
                     else:
                         print("[3/3] LLM polish failed, skipped")
                 else:
