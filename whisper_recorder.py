@@ -6,6 +6,7 @@
 #   "pynput",
 #   "requests",
 #   "python-dotenv",
+#   "google-genai",
 # ]
 # ///
 
@@ -134,6 +135,53 @@ def transcribe_with_groq(audio_path: Path, api_key: str, language: str | None = 
     return None
 
 
+def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3) -> str | None:
+    """
+    使用 Gemini 优化转录文本。
+
+    Args:
+        raw_text: 原始转录文本
+        api_key: Gemini API Key
+        max_retries: 最大重试次数
+
+    Returns:
+        优化后的文本，失败时返回 None
+    """
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+
+    prompt = """你是一个专业的文字编辑。请优化以下语音转录文本：
+
+1. 修正明显的转录错误（如专业术语、人名、缩写）
+2. 整理成结构化格式（添加标题、列表、分段）
+3. 对专业术语补充英文对照
+4. 保持原意，使语句更通顺
+
+原始转录：
+{raw_text}
+
+请直接输出优化后的文本，不要添加任何解释。"""
+
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt.format(raw_text=raw_text)],
+            )
+            return response.text
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"LLM error: {e}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"LLM polish failed: {e}")
+                return None
+
+    return None
+
+
 class WhisperRecorder:
     """Audio recorder optimized for whisper/low-volume speech"""
 
@@ -215,6 +263,16 @@ class WhisperRecorder:
             language = os.getenv("WHISPER_LANGUAGE")  # None if not set
             transcript = transcribe_with_groq(output_path, api_key, language=language)
             if transcript:
+                # LLM 优化
+                gemini_key = os.getenv("GEMINI_API_KEY")
+                if gemini_key:
+                    print("Polishing transcript with LLM...")
+                    polished = polish_transcript_with_llm(transcript, gemini_key)
+                    if polished:
+                        transcript = polished
+                    else:
+                        print("LLM polish failed, using original transcript")
+
                 md_path = output_path.with_suffix(".md")
                 md_path.write_text(transcript, encoding="utf-8")
                 print(f"Transcript saved to: {md_path}")
