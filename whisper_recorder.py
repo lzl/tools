@@ -34,30 +34,89 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     Enhance low-volume/whisper audio for better Whisper recognition.
 
     Pipeline:
-    1. High-pass filter to remove low-frequency noise
-    2. RMS normalization to boost overall loudness
-    3. Soft limiting (tanh) to prevent clipping
-    4. Peak normalization to ensure safe output level
+    1. Pre-emphasis - enhance high-frequency consonants (P, T, K, S, etc.)
+    2. Noise gate - remove low-energy noise below dynamic threshold
+    3. Dynamic compression - boost quiet parts while preserving dynamics
+    4. Spectral shaping - enhance 1-4kHz speech-critical frequency band
+    5. Peak normalization - ensure safe output level
     """
     if audio.size == 0:
         return audio
 
-    # 1. High-pass filter at 80 Hz (remove rumble, keep whisper frequencies)
-    sos = butter(4, 80, btype='highpass', fs=sample_rate, output='sos')
-    audio = sosfilt(sos, audio).astype(np.float32)
+    # 1. Pre-emphasis: first-order high-pass to enhance consonants
+    # This helps preserve plosives like "P" which are weak in whispers
+    pre_emphasis = 0.97
+    audio = np.append(audio[0], audio[1:] - pre_emphasis * audio[:-1])
 
-    # 2. RMS normalization - boost to target loudness (-15 dB, aggressive for whisper)
-    target_rms = 10 ** (-15 / 20)  # ~0.178
-    current_rms = np.sqrt(np.mean(audio ** 2))
-    if current_rms > 1e-6:  # Avoid division by zero
-        gain = target_rms / current_rms
-        audio = audio * gain
+    # 2. Noise gate: suppress frames below dynamic threshold
+    frame_size = int(sample_rate * 0.02)  # 20ms frames
+    hop_size = frame_size // 2  # 50% overlap
+    num_frames = (len(audio) - frame_size) // hop_size + 1
 
-    # 3. Soft limiting using tanh to prevent harsh clipping
-    # Scale so that values around 1.0 get compressed
-    audio = np.tanh(audio)
+    if num_frames > 0:
+        # Calculate frame energies
+        frame_energies = np.array([
+            np.sqrt(np.mean(audio[i * hop_size:i * hop_size + frame_size] ** 2))
+            for i in range(num_frames)
+        ])
 
-    # 4. Peak normalization to 0.95 (leave headroom)
+        # Dynamic threshold: 20th percentile of frame energies
+        threshold = np.percentile(frame_energies, 20)
+
+        # Apply soft noise gate with smooth attack/release
+        gated_audio = np.zeros_like(audio)
+        for i in range(num_frames):
+            start = i * hop_size
+            end = min(start + frame_size, len(audio))
+            energy = frame_energies[i]
+
+            if energy > threshold:
+                # Soft gate: gradual transition
+                gate_gain = min(1.0, (energy / threshold) ** 0.5)
+            else:
+                gate_gain = 0.1  # Don't completely silence, keep some context
+
+            # Apply with Hann window for smooth transitions
+            window = np.hanning(end - start)
+            gated_audio[start:end] += audio[start:end] * gate_gain * window
+
+        # Normalize overlap-add result
+        audio = gated_audio / (np.max(np.abs(gated_audio)) + 1e-8)
+
+    # 3. Dynamic compression: logarithmic compression instead of tanh
+    # Threshold at -30dB, ratio 4:1
+    threshold_db = -30
+    ratio = 4.0
+    threshold_linear = 10 ** (threshold_db / 20)
+
+    # Convert to dB domain for compression
+    audio_abs = np.abs(audio)
+    audio_sign = np.sign(audio)
+
+    # Avoid log(0)
+    audio_abs = np.maximum(audio_abs, 1e-10)
+    audio_db = 20 * np.log10(audio_abs)
+
+    # Apply compression above threshold
+    mask = audio_db > threshold_db
+    compressed_db = np.where(
+        mask,
+        threshold_db + (audio_db - threshold_db) / ratio,
+        audio_db
+    )
+
+    # Convert back to linear
+    audio = audio_sign * (10 ** (compressed_db / 20))
+
+    # 4. Spectral shaping: enhance 1-4kHz speech-critical band
+    # This frequency range contains most consonant information
+    sos = butter(2, [1000, 4000], btype='bandpass', fs=sample_rate, output='sos')
+    enhanced_band = sosfilt(sos, audio).astype(np.float32)
+
+    # Mix enhanced band with original (additive enhancement)
+    audio = audio + 0.5 * enhanced_band
+
+    # 5. Peak normalization to 0.95 (leave headroom)
     peak = np.max(np.abs(audio))
     if peak > 1e-6:
         audio = audio * (0.95 / peak)
