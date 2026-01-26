@@ -166,7 +166,7 @@ def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash-lite-preview-09-2025",
                 contents=[prompt.format(raw_text=raw_text)],
             )
             return response.text
@@ -219,7 +219,7 @@ class WhisperRecorder:
         self.stream.start()
         print("Recording started... (press SPACE to stop)")
 
-    def stop_recording(self) -> tuple[Path, Path | None] | None:
+    def stop_recording(self) -> tuple[Path, Path | None, Path | None] | None:
         """Stop recording, save the audio file, and transcribe with Groq API"""
         if not self.is_recording:
             return None
@@ -247,41 +247,50 @@ class WhisperRecorder:
 
         # Generate output filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = self.output_dir / f"whisper_recording_{timestamp}.wav"
+        base_name = f"whisper_recording_{timestamp}"
+        wav_path = self.output_dir / f"{base_name}.wav"
 
         # Convert to int16 for WAV file
         audio_int16 = (enhanced_audio * 32767).astype(np.int16)
-        wavfile.write(output_path, SAMPLE_RATE, audio_int16)
+        wavfile.write(wav_path, SAMPLE_RATE, audio_int16)
 
-        print(f"Saved to: {output_path}")
+        print(f"[1/3] Audio saved to: {wav_path}")
 
         # Transcribe with Groq API
-        md_path = None
+        raw_md_path = None
+        polished_md_path = None
         api_key = os.getenv("GROQ_API_KEY")
         if api_key:
             print("Transcribing with Groq Whisper API...")
             language = os.getenv("WHISPER_LANGUAGE")  # None if not set
-            transcript = transcribe_with_groq(output_path, api_key, language=language)
+            transcript = transcribe_with_groq(wav_path, api_key, language=language)
             if transcript:
+                # 保存原始转录文本
+                raw_md_path = self.output_dir / f"{base_name}.md"
+                raw_md_path.write_text(transcript, encoding="utf-8")
+                print(f"[2/3] Raw transcript saved to: {raw_md_path}")
+
                 # LLM 优化
                 gemini_key = os.getenv("GEMINI_API_KEY")
                 if gemini_key:
                     print("Polishing transcript with LLM...")
                     polished = polish_transcript_with_llm(transcript, gemini_key)
                     if polished:
-                        transcript = polished
+                        polished_md_path = self.output_dir / f"{base_name}_polished.md"
+                        polished_md_path.write_text(polished, encoding="utf-8")
+                        print(f"[3/3] Polished transcript saved to: {polished_md_path}")
                     else:
-                        print("LLM polish failed, using original transcript")
-
-                md_path = output_path.with_suffix(".md")
-                md_path.write_text(transcript, encoding="utf-8")
-                print(f"Transcript saved to: {md_path}")
+                        print("[3/3] LLM polish failed, skipped")
+                else:
+                    print("[3/3] GEMINI_API_KEY not set, skipping LLM polish")
             else:
-                print("Transcription failed, only WAV file saved")
+                print("[2/3] Transcription failed")
+                print("[3/3] Skipped (no transcript)")
         else:
-            print("Warning: GROQ_API_KEY not set, skipping transcription")
+            print("[2/3] GROQ_API_KEY not set, skipping transcription")
+            print("[3/3] Skipped (no transcript)")
 
-        return (output_path, md_path)
+        return (wav_path, raw_md_path, polished_md_path)
 
 
 def main():
