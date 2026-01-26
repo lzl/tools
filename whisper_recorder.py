@@ -151,17 +151,20 @@ def polish_transcript_with_llm(raw_text: str, api_key: str, max_retries: int = 3
 
     client = genai.Client(api_key=api_key)
 
-    prompt = """你是一个专业的文字编辑。请优化以下语音转录文本：
+    prompt = """You are a professional text editor. Please polish the following speech transcript.
 
-1. 修正明显的转录错误（如专业术语、人名、缩写）
-2. 整理成结构化格式（添加标题、列表、分段）
-3. 对专业术语补充英文对照
-4. 保持原意，使语句更通顺
+Rules:
+1. Keep the SAME language as the original - do NOT translate
+2. Fix obvious transcription errors (typos, misheard words, technical terms)
+3. Organize into clear structure (headings, numbered/bulleted lists, paragraphs)
+4. Make sentences flow more naturally while preserving the original meaning
+5. Do NOT add content that wasn't in the original (no summaries, suggestions, or conclusions)
+6. Do NOT overuse formatting - avoid excessive bold, italics, or emphasis
 
-原始转录：
+Original transcript:
 {raw_text}
 
-请直接输出优化后的文本，不要添加任何解释。"""
+Output the polished text directly without any explanation."""
 
     for attempt in range(max_retries):
         try:
