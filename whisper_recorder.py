@@ -85,13 +85,14 @@ def enhance_whisper_audio(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> 
     return audio.astype(np.float32)
 
 
-def transcribe_with_groq(audio_path: Path, api_key: str, max_retries: int = 3) -> str | None:
+def transcribe_with_groq(audio_path: Path, api_key: str, language: str = "zh", max_retries: int = 3) -> str | None:
     """
     调用 Groq Whisper API 转录音频，返回纯文本。
 
     Args:
         audio_path: 音频文件路径
         api_key: Groq API Key
+        language: 语言代码（默认 "zh" 中文）
         max_retries: 最大重试次数（针对 429/5xx 错误）
 
     Returns:
@@ -107,6 +108,7 @@ def transcribe_with_groq(audio_path: Path, api_key: str, max_retries: int = 3) -
                 data = {
                     "model": "whisper-large-v3-turbo",
                     "response_format": "text",
+                    "language": language,
                 }
                 response = requests.post(url, headers=headers, files=files, data=data, timeout=60)
 
