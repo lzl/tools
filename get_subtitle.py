@@ -200,7 +200,11 @@ def get_safe_filename_from_url(video_url: str, extension: str = ".mp3") -> str:
     return f"video_{url_hash}{extension}"
 
 
-def check_subtitle_available(video_url: str, cookies_file: Optional[Path] = None) -> bool:
+def check_subtitle_available(
+    video_url: str,
+    cookies_file: Optional[Path] = None,
+    browser: Optional[str] = None
+) -> bool:
     """Check if subtitles are available for the video"""
     cmd = [
         "yt-dlp",
@@ -209,7 +213,9 @@ def check_subtitle_available(video_url: str, cookies_file: Optional[Path] = None
         "--remote-components", "ejs:github",
     ]
     
-    if cookies_file and cookies_file.exists():
+    if browser:
+        cmd.extend(["--cookies-from-browser", browser])
+    elif cookies_file and cookies_file.exists():
         cmd.extend(["--cookies", str(cookies_file)])
     
     try:
@@ -226,7 +232,8 @@ def check_subtitle_available(video_url: str, cookies_file: Optional[Path] = None
 def download_subtitle_direct(
     video_url: str,
     output_dir: Path,
-    cookies_file: Optional[Path] = None
+    cookies_file: Optional[Path] = None,
+    browser: Optional[str] = None
 ) -> Optional[Path]:
     """Try to download subtitle directly using yt-dlp"""
     print("\n=== Step 1: Attempting to download subtitle directly ===")
@@ -246,7 +253,9 @@ def download_subtitle_direct(
         "--remote-components", "ejs:github",
     ]
     
-    if cookies_file and cookies_file.exists():
+    if browser:
+        cmd.extend(["--cookies-from-browser", browser])
+    elif cookies_file and cookies_file.exists():
         cmd.extend(["--cookies", str(cookies_file)])
     
     try:
@@ -292,7 +301,8 @@ def get_audio_duration(audio_path: Path) -> Optional[float]:
 def download_audio(
     video_url: str,
     temp_dir: Path,
-    cookies_file: Optional[Path] = None
+    cookies_file: Optional[Path] = None,
+    browser: Optional[str] = None
 ) -> Path:
     """Download audio file using download_audio.py tool"""
     print("\n=== Step 2: Downloading audio ===")
@@ -305,6 +315,9 @@ def download_audio(
         raise FileNotFoundError(f"download_audio.py not found at {download_audio_script}")
     
     cmd = ["uv", "run", str(download_audio_script), video_url, str(temp_dir)]
+    
+    if browser:
+        cmd.extend(["--browser", browser])
     
     try:
         subprocess.run(cmd, check=True, capture_output=False)
@@ -586,27 +599,62 @@ def transcribe_audio(
         raise RuntimeError(f"Failed to transcribe audio (exit code {e.returncode})")
 
 
-@typechecked
-def main() -> None:
-    """Get subtitle for a video URL by downloading or transcribing"""
-    if len(sys.argv) < 2:
-        print("Usage: get_subtitle <video_url> [output_directory]")
+def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
+    """
+    Parse command line arguments.
+    
+    Returns:
+        Tuple of (video_url, output_dir, browser_name)
+    """
+    if len(argv) < 2:
+        print("Usage: get_subtitle <video_url> [output_directory] [--browser BROWSER]")
         print("\nExample:")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ ./custom_dir")
+        print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ --browser chrome")
+        print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ ./custom_dir --browser firefox")
+        print("\nSupported browsers: chrome, firefox, safari, edge, opera, brave, chromium, vivaldi")
+        print("\nNote: If YouTube blocks the request, use --browser to authenticate with your browser cookies.")
         sys.exit(1)
     
-    video_url = sys.argv[1]
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output_dir")
+    video_url = argv[1]
+    output_dir = Path("output_dir")
+    browser: Optional[str] = None
+    
+    # Parse remaining arguments
+    i = 2
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--browser" and i + 1 < len(argv):
+            browser = argv[i + 1]
+            i += 2
+        elif not arg.startswith("--"):
+            output_dir = Path(arg)
+            i += 1
+        else:
+            print(f"Unknown argument: {arg}")
+            sys.exit(1)
+    
+    return video_url, output_dir, browser
+
+
+@typechecked
+def main() -> None:
+    """Get subtitle for a video URL by downloading or transcribing"""
+    video_url, output_dir, browser = parse_args(sys.argv)
     
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Check for cookies.txt file
-    cookies_file = Path("cookies.txt")
+    # Check for cookies.txt file (used only if --browser is not specified)
+    cookies_file = Path("cookies.txt") if browser is None else None
     
     print(f"Video URL: {video_url}")
     print(f"Output directory: {output_dir.absolute()}")
+    if browser:
+        print(f"Using cookies from browser: {browser}")
+    elif cookies_file and cookies_file.exists():
+        print(f"Using cookies file: {cookies_file}")
     
     # Create temporary directory for intermediate files
     temp_dir: Optional[Path] = None
@@ -616,7 +664,7 @@ def main() -> None:
         print(f"Temporary directory: {temp_dir}")
         
         # Step 1: Try to download subtitle directly
-        subtitle_file = download_subtitle_direct(video_url, output_dir, cookies_file)
+        subtitle_file = download_subtitle_direct(video_url, output_dir, cookies_file, browser)
         
         if subtitle_file:
             # Add video URL to the downloaded subtitle file
@@ -630,6 +678,7 @@ def main() -> None:
             video_url,
             temp_dir,
             cookies_file,
+            browser,
             max_retries=2,
             delay=5,
             step_name="Downloading audio"
