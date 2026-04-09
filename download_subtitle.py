@@ -10,15 +10,16 @@ import sys
 import subprocess
 from pathlib import Path
 
+from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
+
 
 def list_available_subtitles(video_url, cookies_file=None):
     """List available subtitles for the video"""
-    cmd = [
-        "yt-dlp",
+    cmd = yt_dlp_command(
         video_url,
         "--list-subs",
         "--remote-components", "ejs:github",
-    ]
+    )
     
     if cookies_file and cookies_file.exists():
         cmd.extend(["--cookies", str(cookies_file)])
@@ -175,8 +176,10 @@ def main():
             print("\nSelected: All available languages")
         
         # Build yt-dlp command
-        cmd = [
-            "yt-dlp",
+        yt_dlp = resolve_yt_dlp()
+        version_suffix = f" ({yt_dlp.version})" if yt_dlp.version else ""
+        print(f"Using yt-dlp: {yt_dlp.path}{version_suffix}")
+        cmd = yt_dlp_command(
             video_url,
             "--write-subs",  # Download subtitles
             "--write-auto-subs",  # Download auto-generated subtitles if available
@@ -184,7 +187,7 @@ def main():
             "-o", str(output_dir / "%(title)s.%(ext)s"),
             "--no-mtime",  # Don't set file modification time
             "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
-        ]
+        )
         
         # Add language filter if specified
         if selected_language:
@@ -220,4 +223,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

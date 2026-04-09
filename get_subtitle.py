@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 from typeguard import typechecked
+from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
 
 T = TypeVar('T')
 
@@ -207,10 +208,11 @@ def check_subtitle_available(
 ) -> bool:
     """Check if subtitles are available for the video"""
     cmd = [
-        "yt-dlp",
-        video_url,
-        "--list-subs",
-        "--remote-components", "ejs:github",
+        *yt_dlp_command(
+            video_url,
+            "--list-subs",
+            "--remote-components", "ejs:github",
+        ),
     ]
     
     if browser:
@@ -241,8 +243,7 @@ def download_subtitle_direct(
     # Record existing files before download
     existing_files = set(output_dir.glob("*"))
     
-    cmd = [
-        "yt-dlp",
+    cmd = yt_dlp_command(
         video_url,
         "--write-subs",  # Download subtitles
         "--write-auto-subs",  # Download auto-generated subtitles
@@ -251,7 +252,7 @@ def download_subtitle_direct(
         "-o", str(output_dir / "%(title)s.%(ext)s"),
         "--no-mtime",
         "--remote-components", "ejs:github",
-    ]
+    )
     
     if browser:
         cmd.extend(["--cookies-from-browser", browser])
@@ -660,6 +661,10 @@ def main() -> None:
     temp_dir: Optional[Path] = None
     
     try:
+        yt_dlp = resolve_yt_dlp()
+        version_suffix = f" ({yt_dlp.version})" if yt_dlp.version else ""
+        print(f"Using yt-dlp: {yt_dlp.path}{version_suffix}")
+
         temp_dir = Path(tempfile.mkdtemp(prefix="get_subtitle_"))
         print(f"Temporary directory: {temp_dir}")
         
@@ -778,4 +783,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

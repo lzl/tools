@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from typeguard import typechecked
+from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
 
 
 @dataclass
@@ -91,8 +92,7 @@ def download_subtitle(
     cookies_file: Optional[Path] = None,
 ) -> bool:
     """Download subtitles using yt-dlp."""
-    cmd: list[str] = [
-        "yt-dlp",
+    cmd: list[str] = yt_dlp_command(
         video_url,
         "--write-subs",  # Download subtitles
         "--write-auto-subs",  # Download AI-generated subtitles if available
@@ -104,7 +104,7 @@ def download_subtitle(
         "-o",
         str(output_dir / "%(title)s.%(ext)s"),
         "--no-mtime",  # Don't set file modification time
-    ]
+    )
 
     # Add cookies file if it exists
     if cookies_file is not None and cookies_file.exists():
@@ -155,6 +155,10 @@ def main() -> None:
         print(f"Using cookies file: {cookies_file.absolute()}")
 
     try:
+        yt_dlp = resolve_yt_dlp()
+        version_suffix = f" ({yt_dlp.version})" if yt_dlp.version else ""
+        print(f"Using yt-dlp: {yt_dlp.path}{version_suffix}")
+
         print("\nDownloading subtitles...")
         success: bool = download_subtitle(
             video_url, parsed.lang, parsed.output_dir, cookies_file

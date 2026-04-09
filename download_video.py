@@ -10,6 +10,8 @@ import sys
 import subprocess
 from pathlib import Path
 
+from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
+
 
 def main():
     """Download video from provided URL using yt-dlp"""
@@ -35,14 +37,17 @@ def main():
         print(f"Using cookies file: {cookies_file.absolute()}")
     
     try:
+        yt_dlp = resolve_yt_dlp()
+        version_suffix = f" ({yt_dlp.version})" if yt_dlp.version else ""
+        print(f"Using yt-dlp: {yt_dlp.path}{version_suffix}")
+
         # Build yt-dlp command
-        cmd = [
-            "yt-dlp",
+        cmd = yt_dlp_command(
             video_url,
             "-o", str(output_dir / "%(title)s.%(ext)s"),
             "--no-mtime",  # Don't set file modification time
             "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
-        ]
+        )
         
         # Add cookies file if it exists
         if cookies_file.exists():
@@ -73,4 +78,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
