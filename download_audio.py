@@ -13,6 +13,8 @@ from typing import Optional
 
 from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
 
+STREAMING_FRAGMENT_CONCURRENCY = 20
+
 
 def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
     """
@@ -52,6 +54,24 @@ def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
     return video_url, output_dir, browser
 
 
+def build_download_command(video_url: str, output_dir: Path) -> list[str]:
+    """
+    Build the yt-dlp download command.
+
+    `-N` is only meaningful for fragmented downloads, so keeping it on the
+    command line preserves the simple `worstaudio` flow while speeding up
+    HLS/DASH cases.
+    """
+    return yt_dlp_command(
+        video_url,
+        "-f", "worstaudio",
+        "-o", str(output_dir / "%(title)s.%(ext)s"),
+        "--no-mtime",
+        "--remote-components", "ejs:github",
+        "-N", str(STREAMING_FRAGMENT_CONCURRENCY),
+    )
+
+
 def main() -> None:
     """Download audio from provided URL using yt-dlp"""
     video_url, output_dir, browser = parse_args(sys.argv)
@@ -74,15 +94,10 @@ def main() -> None:
         version_suffix = f" ({yt_dlp.version})" if yt_dlp.version else ""
         print(f"Using yt-dlp: {yt_dlp.path}{version_suffix}")
 
-        # Build yt-dlp command
-        cmd = yt_dlp_command(
-            video_url,
-            "-f", "worstaudio",  # Select worst audio quality (smallest file size)
-            "-o", str(output_dir / "%(title)s.%(ext)s"),
-            "--no-mtime",  # Don't set file modification time
-            "--remote-components", "ejs:github",  # Enable EJS script downloads from GitHub
-        )
-        
+        # yt-dlp only uses `-N` for fragmented downloads, so this stays simple
+        # for normal files and speeds up streaming formats when needed.
+        cmd = build_download_command(video_url, output_dir)
+
         # Add cookies from browser or file
         if browser:
             cmd.extend(["--cookies-from-browser", browser])
