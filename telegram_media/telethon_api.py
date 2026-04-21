@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Callable
+import asyncio
+import math
+import shutil
 from pathlib import Path
+from typing import Any, Callable
 
-from telethon import TelegramClient
+from telethon import TelegramClient, functions, utils
 from telethon.errors import (
     ChannelPrivateError,
     RPCError,
@@ -11,11 +14,11 @@ from telethon.errors import (
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
+from telethon.network.mtprotosender import MTProtoSender
 from telethon.sessions import StringSession
-from telethon.tl.custom.message import Message
-from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
+from telethon.tl import types
 
-from telegram_media.downloader import ChannelMessage
+from telegram_media.downloader import ChannelMessage, DownloadInterrupted
 from telegram_media.session import (
     load_api_credentials,
     load_download_session,
@@ -24,8 +27,11 @@ from telegram_media.session import (
     prompt_phone,
 )
 
+PARALLEL_VIDEO_SHARD_COUNT = 10
+PARALLEL_VIDEO_REQUEST_SIZE = 512 * 1024
 
-def _resolve_extension(message: Message, default: str) -> str:
+
+def _resolve_extension(message: types.Message, default: str) -> str:
     file_wrapper = getattr(message, "file", None)
     extension = getattr(file_wrapper, "ext", None)
     if extension:
@@ -68,6 +74,35 @@ class TelethonMediaApi:
         *,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> str | bytes | None:
+        if self._should_use_parallel_video_download(message):
+            try:
+                return await self._download_video_in_parallel(
+                    message,
+                    destination,
+                    progress_callback=progress_callback,
+                )
+            except DownloadInterrupted:
+                raise
+            except Exception:
+                return await self._download_media_single(
+                    message,
+                    destination,
+                    progress_callback=progress_callback,
+                )
+
+        return await self._download_media_single(
+            message,
+            destination,
+            progress_callback=progress_callback,
+        )
+
+    async def _download_media_single(
+        self,
+        message: ChannelMessage,
+        destination: Path,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str | bytes | None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         return await self.client.download_media(
             message.source,
@@ -75,8 +110,104 @@ class TelethonMediaApi:
             progress_callback=progress_callback,
         )
 
-    def _to_channel_message(self, channel_id: int | str, message: Message) -> ChannelMessage:
-        if isinstance(message.media, MessageMediaPhoto) and message.photo is not None:
+    async def _download_video_in_parallel(
+        self,
+        message: ChannelMessage,
+        destination: Path,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str:
+        if message.file_size is None or message.input_location is None or message.dc_id is None:
+            raise RuntimeError("parallel video download requires file_size, dc_id, and input_location")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shard_dir = self._build_shard_dir(destination)
+        shutil.rmtree(shard_dir, ignore_errors=True)
+        shard_dir.mkdir(parents=True, exist_ok=True)
+
+        progress_by_worker: dict[int, int] = {}
+        progress_lock = asyncio.Lock()
+        senders: list[Any] = []
+        tasks: list[asyncio.Task[None]] = []
+
+        total_chunks = max(1, math.ceil(message.file_size / PARALLEL_VIDEO_REQUEST_SIZE))
+        worker_count = min(PARALLEL_VIDEO_SHARD_COUNT, total_chunks)
+        chunk_ranges = self._build_chunk_ranges(
+            file_size=message.file_size,
+            worker_count=worker_count,
+        )
+
+        try:
+            for _ in range(worker_count):
+                senders.append(await self._create_parallel_sender(message.dc_id))
+
+            async def run_worker(worker_index: int, sender: Any) -> None:
+                start_chunk, end_chunk = chunk_ranges[worker_index]
+                shard_path = shard_dir / f"part-{worker_index:02}.bin"
+                with shard_path.open("wb") as shard_handle:
+                    for chunk_index in range(start_chunk, end_chunk):
+                        offset = chunk_index * PARALLEL_VIDEO_REQUEST_SIZE
+                        limit = min(
+                            PARALLEL_VIDEO_REQUEST_SIZE,
+                            message.file_size - offset,
+                        )
+                        chunk = await self._fetch_file_chunk(
+                            sender=sender,
+                            input_location=message.input_location,
+                            offset=offset,
+                            limit=limit,
+                        )
+                        if not chunk:
+                            break
+                        shard_handle.write(chunk)
+                        async with progress_lock:
+                            progress_by_worker[worker_index] = (
+                                progress_by_worker.get(worker_index, 0) + len(chunk)
+                            )
+                            if progress_callback is not None:
+                                progress_callback(
+                                    sum(progress_by_worker.values()),
+                                    message.file_size,
+                                )
+                        if len(chunk) < limit:
+                            break
+
+            tasks = [
+                asyncio.create_task(run_worker(worker_index, senders[worker_index]))
+                for worker_index in range(worker_count)
+            ]
+            await asyncio.gather(*tasks)
+
+            with destination.open("wb") as destination_handle:
+                for worker_index in range(worker_count):
+                    shard_path = shard_dir / f"part-{worker_index:02}.bin"
+                    if not shard_path.exists():
+                        continue
+                    with shard_path.open("rb") as shard_handle:
+                        shutil.copyfileobj(shard_handle, destination_handle)
+        except Exception:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if destination.exists():
+                destination.unlink()
+            shutil.rmtree(shard_dir, ignore_errors=True)
+            raise
+        finally:
+            for sender in senders:
+                await self._disconnect_parallel_sender(sender, message.dc_id)
+
+        shutil.rmtree(shard_dir, ignore_errors=True)
+        return str(destination)
+
+    def _to_channel_message(self, channel_id: int | str, message: types.Message) -> ChannelMessage:
+        if isinstance(message.media, types.MessageMediaPhoto) and message.photo is not None:
+            dc_id, input_location = utils.get_input_location(message.photo)
+            photo_size = None
+            if message.photo.sizes:
+                photo_size = getattr(message.photo.sizes[-1], "size", None)
             return ChannelMessage(
                 channel_id=channel_id,
                 message_id=message.id,
@@ -84,10 +215,14 @@ class TelethonMediaApi:
                 file_id=str(message.photo.id),
                 extension=_resolve_extension(message, ".jpg"),
                 source=message,
+                file_size=photo_size,
+                dc_id=dc_id,
+                input_location=input_location,
             )
 
-        if isinstance(message.media, MessageMediaDocument) and message.document is not None:
+        if isinstance(message.media, types.MessageMediaDocument) and message.document is not None:
             mime_type = message.document.mime_type or ""
+            dc_id, input_location = utils.get_input_location(message.document)
             if mime_type.startswith("video/"):
                 return ChannelMessage(
                     channel_id=channel_id,
@@ -96,6 +231,9 @@ class TelethonMediaApi:
                     file_id=str(message.document.id),
                     extension=_resolve_extension(message, ".mp4"),
                     source=message,
+                    file_size=message.document.size,
+                    dc_id=dc_id,
+                    input_location=input_location,
                 )
             if mime_type.startswith("image/"):
                 return ChannelMessage(
@@ -105,6 +243,9 @@ class TelethonMediaApi:
                     file_id=str(message.document.id),
                     extension=_resolve_extension(message, ".jpg"),
                     source=message,
+                    file_size=message.document.size,
+                    dc_id=dc_id,
+                    input_location=input_location,
                 )
 
         return ChannelMessage(
@@ -115,6 +256,92 @@ class TelethonMediaApi:
             extension=None,
             source=message,
         )
+
+    def _should_use_parallel_video_download(self, message: ChannelMessage) -> bool:
+        return (
+            message.media_type == "video"
+            and message.file_size is not None
+            and message.file_size > 0
+            and message.dc_id is not None
+            and message.input_location is not None
+        )
+
+    def _build_shard_dir(self, destination: Path) -> Path:
+        return destination.parent / f"{destination.name.removesuffix('.part')}.parts"
+
+    def _build_chunk_ranges(
+        self,
+        *,
+        file_size: int,
+        worker_count: int,
+    ) -> list[tuple[int, int]]:
+        total_chunks = max(1, math.ceil(file_size / PARALLEL_VIDEO_REQUEST_SIZE))
+        base_chunk_count, remainder = divmod(total_chunks, worker_count)
+        ranges: list[tuple[int, int]] = []
+        current_chunk = 0
+        for worker_index in range(worker_count):
+            chunk_count = base_chunk_count + (1 if worker_index < remainder else 0)
+            ranges.append((current_chunk, current_chunk + chunk_count))
+            current_chunk += chunk_count
+        return ranges
+
+    async def _create_parallel_sender(self, dc_id: int):
+        if self.client.session.dc_id == dc_id:
+            dc = await self.client._get_dc(dc_id)
+            sender = MTProtoSender(
+                self.client.session.auth_key,
+                loggers=self.client._log,
+                retries=self.client._connection_retries,
+                delay=self.client._retry_delay,
+                auto_reconnect=self.client._auto_reconnect,
+                connect_timeout=self.client._timeout,
+                auth_key_callback=self.client._auth_key_callback,
+                updates_queue=self.client._updates_queue,
+                auto_reconnect_callback=self.client._handle_auto_reconnect,
+            )
+            await sender.connect(
+                self.client._connection(
+                    dc.ip_address,
+                    dc.port,
+                    dc.id,
+                    loggers=self.client._log,
+                    proxy=self.client._proxy,
+                    local_addr=self.client._local_addr,
+                )
+            )
+            return sender
+
+        return await self.client._create_exported_sender(dc_id)
+
+    async def _disconnect_parallel_sender(self, sender: Any, dc_id: int) -> None:
+        try:
+            await sender.disconnect()
+        except Exception:
+            return None
+
+    async def _fetch_file_chunk(
+        self,
+        *,
+        sender: Any,
+        input_location: Any,
+        offset: int,
+        limit: int,
+    ) -> bytes:
+        result = await self.client._call(
+            sender,
+            functions.upload.GetFileRequest(
+                location=input_location,
+                offset=offset,
+                limit=limit,
+                precise=True,
+                cdn_supported=True,
+            ),
+        )
+        if isinstance(result, types.upload.FileCdnRedirect):
+            raise RuntimeError("parallel downloader does not support CDN redirects")
+        if isinstance(result, types.upload.CdnFileReuploadNeeded):
+            raise RuntimeError("parallel downloader does not support CDN reupload")
+        return result.bytes
 
 
 async def create_download_client() -> TelegramClient:

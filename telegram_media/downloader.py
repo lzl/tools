@@ -23,6 +23,9 @@ class ChannelMessage:
     file_id: str | None
     extension: str | None
     source: Any
+    file_size: int | None = None
+    dc_id: int | None = None
+    input_location: Any = None
 
 
 @dataclass(frozen=True)
