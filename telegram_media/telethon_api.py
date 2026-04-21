@@ -147,15 +147,11 @@ class TelethonMediaApi:
                 with shard_path.open("wb") as shard_handle:
                     for chunk_index in range(start_chunk, end_chunk):
                         offset = chunk_index * PARALLEL_VIDEO_REQUEST_SIZE
-                        limit = min(
-                            PARALLEL_VIDEO_REQUEST_SIZE,
-                            message.file_size - offset,
-                        )
                         chunk = await self._fetch_file_chunk(
                             sender=sender,
                             input_location=message.input_location,
                             offset=offset,
-                            limit=limit,
+                            limit=PARALLEL_VIDEO_REQUEST_SIZE,
                         )
                         if not chunk:
                             break
@@ -169,7 +165,7 @@ class TelethonMediaApi:
                                     sum(progress_by_worker.values()),
                                     message.file_size,
                                 )
-                        if len(chunk) < limit:
+                        if len(chunk) < PARALLEL_VIDEO_REQUEST_SIZE:
                             break
 
             tasks = [

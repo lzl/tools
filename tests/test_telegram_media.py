@@ -19,7 +19,10 @@ from telegram_media.downloader import (
     normalize_channel_id,
 )
 from telegram_media.session import load_dotenv_if_present
-from telegram_media.telethon_api import TelethonMediaApi
+from telegram_media.telethon_api import (
+    PARALLEL_VIDEO_REQUEST_SIZE,
+    TelethonMediaApi,
+)
 
 
 class FakeTelegramApi:
@@ -191,6 +194,25 @@ class FakeParallelTelethonMediaApi(TelethonMediaApi):
         limit: int,
     ) -> bytes:
         return self._shard_payloads.get(offset, b"")
+
+
+class StrictLimitParallelTelethonMediaApi(FakeParallelTelethonMediaApi):
+    async def _fetch_file_chunk(
+        self,
+        *,
+        sender,
+        input_location,
+        offset: int,
+        limit: int,
+    ) -> bytes:
+        if limit != PARALLEL_VIDEO_REQUEST_SIZE:
+            raise RuntimeError(f"unexpected limit {limit}")
+        return await super()._fetch_file_chunk(
+            sender=sender,
+            input_location=input_location,
+            offset=offset,
+            limit=limit,
+        )
 
 
 class NormalizeChannelIdTests(unittest.TestCase):
@@ -427,6 +449,35 @@ class TelethonMediaApiTests(unittest.TestCase):
             self.assertTrue(seen_first_progress)
             self.assertFalse(destination.exists())
             self.assertFalse((Path(temp_dir) / "425.mp4.parts").exists())
+
+    def test_parallel_download_uses_fixed_request_size_for_tail_chunk(self) -> None:
+        payload = {
+            0: b"a" * PARALLEL_VIDEO_REQUEST_SIZE,
+            PARALLEL_VIDEO_REQUEST_SIZE: b"b" * PARALLEL_VIDEO_REQUEST_SIZE,
+            2 * PARALLEL_VIDEO_REQUEST_SIZE: b"tail-bytes",
+        }
+        api = StrictLimitParallelTelethonMediaApi(payload)
+        message = ChannelMessage(
+            channel_id=-1001234567890,
+            message_id=426,
+            media_type="video",
+            file_id="video-426",
+            extension=".mp4",
+            source=object(),
+            file_size=(2 * PARALLEL_VIDEO_REQUEST_SIZE) + len(payload[2 * PARALLEL_VIDEO_REQUEST_SIZE]),
+            dc_id=4,
+            input_location=object(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "426.mp4.part"
+            result = asyncio.run(api._download_video_in_parallel(message, destination))
+
+            self.assertEqual(result, str(destination))
+            self.assertEqual(
+                destination.read_bytes(),
+                payload[0] + payload[PARALLEL_VIDEO_REQUEST_SIZE] + payload[2 * PARALLEL_VIDEO_REQUEST_SIZE],
+            )
 
 
 class DotenvLoadingTests(unittest.TestCase):
