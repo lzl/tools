@@ -24,7 +24,9 @@ from telegram_media.downloader import (
 )
 from telegram_media.session import load_dotenv_if_present
 from telegram_media.telethon_api import (
+    PARALLEL_VIDEO_MIN_BYTES,
     PARALLEL_VIDEO_REQUEST_SIZE,
+    SAFE_PARALLEL_VIDEO_SHARD_COUNT,
     TelethonMediaApi,
 )
 
@@ -182,8 +184,12 @@ class FakeTTYStream(io.StringIO):
 
 
 class FakeParallelClient:
-    def __init__(self) -> None:
+    def __init__(self, *, dc_id: int = 4, auth_key_bytes: bytes | None = None) -> None:
         self.download_media = AsyncMock()
+        self.session = SimpleNamespace(
+            dc_id=dc_id,
+            auth_key=AuthKey(auth_key_bytes or (b"p" * 256)),
+        )
 
 
 class FakeParallelTelethonMediaApi(TelethonMediaApi):
@@ -235,7 +241,7 @@ class TrackingSinglePathTelethonMediaApi(TelethonMediaApi):
     def __init__(self) -> None:
         super().__init__(client=FakeParallelClient())
         self.parallel_calls = 0
-        self.custom_single_calls = 0
+        self.single_calls = 0
 
     async def _download_video_in_parallel(
         self,
@@ -247,14 +253,14 @@ class TrackingSinglePathTelethonMediaApi(TelethonMediaApi):
         self.parallel_calls += 1
         raise RuntimeError("parallel failed")
 
-    async def _download_video_single_with_cached_auth(
+    async def _download_media_single(
         self,
         message: ChannelMessage,
         destination: Path,
         *,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> str:
-        self.custom_single_calls += 1
+        self.single_calls += 1
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"single-fallback")
         return str(destination)
@@ -298,18 +304,19 @@ class TelethonMediaApiTests(unittest.TestCase):
             _borrow_exported_sender=AsyncMock(return_value=borrowed_sender),
             _return_exported_sender=AsyncMock(),
         )
-        api = TelethonMediaApi(client=client)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            api = TelethonMediaApi(client=client, output_root=Path(temp_dir))
 
-        first = asyncio.run(api._get_parallel_auth_key(1))
-        second = asyncio.run(api._get_parallel_auth_key(1))
+            first = asyncio.run(api._get_parallel_auth_key(1))
+            second = asyncio.run(api._get_parallel_auth_key(1))
 
-        self.assertEqual(first.key, second.key)
-        self.assertIsNot(first, second)
-        client._borrow_exported_sender.assert_awaited_once_with(1)
-        client._return_exported_sender.assert_awaited_once_with(borrowed_sender)
+            self.assertEqual(first.key, second.key)
+            self.assertIsNot(first, second)
+            client._borrow_exported_sender.assert_awaited_once_with(1)
+            client._return_exported_sender.assert_awaited_once_with(borrowed_sender)
 
-    def test_video_uses_parallel_path(self) -> None:
-        api = TelethonMediaApi(client=FakeParallelClient())
+    def test_same_dc_small_video_uses_single_path(self) -> None:
+        api = TelethonMediaApi(client=FakeParallelClient(dc_id=4))
         message = ChannelMessage(
             channel_id=-1001234567890,
             message_id=425,
@@ -317,7 +324,37 @@ class TelethonMediaApiTests(unittest.TestCase):
             file_id="video-425",
             extension=".mp4",
             source=object(),
-            file_size=2048,
+            file_size=PARALLEL_VIDEO_MIN_BYTES - 1,
+            dc_id=4,
+            input_location=object(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "425.mp4.part"
+            with patch.object(
+                api,
+                "_download_video_in_parallel",
+                new=AsyncMock(return_value=str(destination)),
+            ) as parallel_mock, patch.object(
+                api,
+                "_download_media_single",
+                new=AsyncMock(return_value=str(destination)),
+            ) as single_mock:
+                asyncio.run(api.download_media(message, destination))
+
+        parallel_mock.assert_not_awaited()
+        single_mock.assert_awaited_once()
+
+    def test_same_dc_large_video_uses_parallel_path(self) -> None:
+        api = TelethonMediaApi(client=FakeParallelClient(dc_id=4))
+        message = ChannelMessage(
+            channel_id=-1001234567890,
+            message_id=425,
+            media_type="video",
+            file_id="video-425",
+            extension=".mp4",
+            source=object(),
+            file_size=PARALLEL_VIDEO_MIN_BYTES,
             dc_id=4,
             input_location=object(),
         )
@@ -337,6 +374,36 @@ class TelethonMediaApiTests(unittest.TestCase):
 
         parallel_mock.assert_awaited_once()
         single_mock.assert_not_awaited()
+
+    def test_cross_dc_video_never_uses_parallel_path(self) -> None:
+        api = TelethonMediaApi(client=FakeParallelClient(dc_id=5))
+        message = ChannelMessage(
+            channel_id=-1001234567890,
+            message_id=425,
+            media_type="video",
+            file_id="video-425",
+            extension=".mp4",
+            source=object(),
+            file_size=PARALLEL_VIDEO_MIN_BYTES * 2,
+            dc_id=1,
+            input_location=object(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "425.mp4.part"
+            with patch.object(
+                api,
+                "_download_video_in_parallel",
+                new=AsyncMock(return_value=str(destination)),
+            ) as parallel_mock, patch.object(
+                api,
+                "_download_media_single",
+                new=AsyncMock(return_value=str(destination)),
+            ) as single_mock:
+                asyncio.run(api.download_media(message, destination))
+
+        parallel_mock.assert_not_awaited()
+        single_mock.assert_awaited_once()
 
     def test_image_uses_single_path(self) -> None:
         api = TelethonMediaApi(client=FakeParallelClient())
@@ -365,7 +432,7 @@ class TelethonMediaApiTests(unittest.TestCase):
         parallel_mock.assert_not_awaited()
         single_mock.assert_awaited_once()
 
-    def test_parallel_failure_falls_back_to_single_path(self) -> None:
+    def test_non_rpc_parallel_failure_falls_back_to_native_single_path(self) -> None:
         api = TrackingSinglePathTelethonMediaApi()
         message = ChannelMessage(
             channel_id=-1001234567890,
@@ -374,7 +441,7 @@ class TelethonMediaApiTests(unittest.TestCase):
             file_id="video-425",
             extension=".mp4",
             source=object(),
-            file_size=2048,
+            file_size=PARALLEL_VIDEO_MIN_BYTES,
             dc_id=4,
             input_location=object(),
         )
@@ -385,7 +452,7 @@ class TelethonMediaApiTests(unittest.TestCase):
 
         self.assertEqual(result, str(destination))
         self.assertEqual(api.parallel_calls, 1)
-        self.assertEqual(api.custom_single_calls, 1)
+        self.assertEqual(api.single_calls, 1)
 
     def test_interrupt_does_not_fall_back(self) -> None:
         api = TelethonMediaApi(client=FakeParallelClient())
@@ -396,7 +463,7 @@ class TelethonMediaApiTests(unittest.TestCase):
             file_id="video-425",
             extension=".mp4",
             source=object(),
-            file_size=2048,
+            file_size=PARALLEL_VIDEO_MIN_BYTES,
             dc_id=4,
             input_location=object(),
         )
@@ -418,47 +485,106 @@ class TelethonMediaApiTests(unittest.TestCase):
         parallel_mock.assert_awaited_once()
         single_mock.assert_not_awaited()
 
-    def test_flood_wait_is_wrapped_as_runtime_error(self) -> None:
-        api = TelethonMediaApi(client=SimpleNamespace(session=SimpleNamespace(dc_id=5)))
-        message = ChannelMessage(
-            channel_id=-1001234567890,
-            message_id=877,
-            media_type="video",
-            file_id="video-877",
-            extension=".mp4",
-            source=object(),
-            file_size=2048,
-            dc_id=1,
-            input_location=object(),
-        )
-
+    def test_parallel_flood_wait_aborts_without_fallback_and_persists_download_cooldown(self) -> None:
+        client = FakeParallelClient(dc_id=4)
         with tempfile.TemporaryDirectory() as temp_dir:
+            api = TelethonMediaApi(client=client, output_root=Path(temp_dir))
+            message = ChannelMessage(
+                channel_id=-1001234567890,
+                message_id=877,
+                media_type="video",
+                file_id="video-877",
+                extension=".mp4",
+                source=object(),
+                file_size=PARALLEL_VIDEO_MIN_BYTES,
+                dc_id=4,
+                input_location=object(),
+            )
             destination = Path(temp_dir) / "877.mp4.part"
             with patch.object(
                 api,
                 "_download_video_in_parallel",
-                new=AsyncMock(side_effect=RuntimeError("parallel failed")),
-            ), patch.object(
-                api,
-                "_download_video_single_with_cached_auth",
                 new=AsyncMock(
                     side_effect=FloodWaitError(
-                        request="ExportAuthorizationRequest",
+                        request="GetFileRequest",
                         capture=1486,
                     )
                 ),
-            ):
+            ), patch.object(
+                api,
+                "_download_media_single",
+                new=AsyncMock(return_value=str(destination)),
+            ) as single_mock:
                 with self.assertRaises(RuntimeError) as caught:
                     asyncio.run(api.download_media(message, destination))
 
-        self.assertIn("Telegram is temporarily throttling cross-DC downloads", str(caught.exception))
-        self.assertIn("Retry in about 24m 46s.", str(caught.exception))
+            self.assertIn("temporarily throttling downloads", str(caught.exception))
+            self.assertIn("24m 46s", str(caught.exception))
+            single_mock.assert_not_awaited()
+            self.assertTrue((Path(temp_dir) / "_runtime" / "rate_limits.json").exists())
 
-    def test_parallel_download_merges_ten_shards_and_cleans_up(self) -> None:
+    def test_export_auth_flood_wait_persists_cooldown_and_short_circuits_future_borrows(self) -> None:
+        client = SimpleNamespace(
+            session=SimpleNamespace(dc_id=5, auth_key=AuthKey(b"s" * 256)),
+            _borrow_exported_sender=AsyncMock(
+                side_effect=FloodWaitError(
+                    request="ExportAuthorizationRequest",
+                    capture=1486,
+                )
+            ),
+            _return_exported_sender=AsyncMock(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            api = TelethonMediaApi(client=client, output_root=Path(temp_dir))
+
+            with self.assertRaises(RuntimeError) as first_error:
+                asyncio.run(api._get_parallel_auth_key(1))
+
+            self.assertIn("cross-DC downloads", str(first_error.exception))
+            client._borrow_exported_sender.assert_awaited_once_with(1)
+
+            with self.assertRaises(RuntimeError) as second_error:
+                asyncio.run(api._get_parallel_auth_key(1))
+
+            self.assertIn("cross-DC downloads", str(second_error.exception))
+            client._borrow_exported_sender.assert_awaited_once_with(1)
+
+    def test_rate_limit_state_is_scoped_to_account_fingerprint(self) -> None:
+        first_client = SimpleNamespace(
+            session=SimpleNamespace(dc_id=5, auth_key=AuthKey(b"a" * 256)),
+            _borrow_exported_sender=AsyncMock(
+                side_effect=FloodWaitError(
+                    request="ExportAuthorizationRequest",
+                    capture=300,
+                )
+            ),
+            _return_exported_sender=AsyncMock(),
+        )
+        second_borrowed_sender = SimpleNamespace(auth_key=AuthKey(b"z" * 256))
+        second_client = SimpleNamespace(
+            session=SimpleNamespace(dc_id=5, auth_key=AuthKey(b"b" * 256)),
+            _borrow_exported_sender=AsyncMock(return_value=second_borrowed_sender),
+            _return_exported_sender=AsyncMock(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_api = TelethonMediaApi(client=first_client, output_root=Path(temp_dir))
+            with self.assertRaises(RuntimeError):
+                asyncio.run(first_api._get_parallel_auth_key(1))
+
+            second_api = TelethonMediaApi(client=second_client, output_root=Path(temp_dir))
+            auth_key = asyncio.run(second_api._get_parallel_auth_key(1))
+
+            self.assertEqual(auth_key.key, second_borrowed_sender.auth_key.key)
+            second_client._borrow_exported_sender.assert_awaited_once_with(1)
+            second_client._return_exported_sender.assert_awaited_once_with(second_borrowed_sender)
+
+    def test_parallel_download_merges_four_shards_and_cleans_up(self) -> None:
         shard_size = 512 * 1024
         payload = {
             index * shard_size: f"chunk-{index}".encode("utf-8")
-            for index in range(10)
+            for index in range(SAFE_PARALLEL_VIDEO_SHARD_COUNT)
         }
         api = FakeParallelTelethonMediaApi(payload)
         message = ChannelMessage(
@@ -468,7 +594,7 @@ class TelethonMediaApiTests(unittest.TestCase):
             file_id="video-425",
             extension=".mp4",
             source=object(),
-            file_size=10 * shard_size,
+            file_size=SAFE_PARALLEL_VIDEO_SHARD_COUNT * shard_size,
             dc_id=4,
             input_location=object(),
         )
@@ -490,17 +616,29 @@ class TelethonMediaApiTests(unittest.TestCase):
             self.assertTrue(destination.exists())
             self.assertEqual(
                 destination.read_bytes(),
-                b"".join(payload[index * shard_size] for index in range(10)),
+                b"".join(
+                    payload[index * shard_size]
+                    for index in range(SAFE_PARALLEL_VIDEO_SHARD_COUNT)
+                ),
             )
             self.assertFalse((Path(temp_dir) / "425.mp4.parts").exists())
 
-        self.assertEqual(len([event for event in api.sender_events if event[0] == "create"]), 10)
+        self.assertEqual(
+            len([event for event in api.sender_events if event[0] == "create"]),
+            SAFE_PARALLEL_VIDEO_SHARD_COUNT,
+        )
         self.assertEqual(
             len([event for event in api.sender_events if event[0] == "disconnect"]),
-            10,
+            SAFE_PARALLEL_VIDEO_SHARD_COUNT,
         )
         self.assertTrue(progress_events)
-        self.assertEqual(progress_events[-1], (sum(len(chunk) for chunk in payload.values()), 10 * shard_size))
+        self.assertEqual(
+            progress_events[-1],
+            (
+                sum(len(chunk) for chunk in payload.values()),
+                SAFE_PARALLEL_VIDEO_SHARD_COUNT * shard_size,
+            ),
+        )
 
     def test_parallel_download_cleans_up_shards_on_interrupt(self) -> None:
         shard_size = 512 * 1024
@@ -513,7 +651,7 @@ class TelethonMediaApiTests(unittest.TestCase):
             file_id="video-425",
             extension=".mp4",
             source=object(),
-            file_size=10 * shard_size,
+            file_size=SAFE_PARALLEL_VIDEO_SHARD_COUNT * shard_size,
             dc_id=4,
             input_location=object(),
         )
@@ -693,6 +831,46 @@ class DownloadChannelMediaRunnerTests(unittest.TestCase):
             reporter.events[-1],
             ("run_finished", None, False, True),
         )
+
+    def test_rate_limit_failure_does_not_write_manifest_or_checkpoint(self) -> None:
+        class RateLimitedTelegramApi(FakeTelegramApi):
+            async def download_media(
+                self,
+                message: ChannelMessage,
+                destination: Path,
+                *,
+                progress_callback: Callable[[int, int], None] | None = None,
+            ) -> None:
+                raise RuntimeError("Telegram is temporarily throttling downloads. Retry later.")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            channel_id = -1001234567890
+            channel_root = output_root / str(channel_id)
+            runner = DownloadChannelMediaRunner(
+                api=RateLimitedTelegramApi(
+                    [
+                        ChannelMessage(
+                            channel_id=channel_id,
+                            message_id=425,
+                            media_type="video",
+                            file_id="video-425",
+                            extension=".mp4",
+                            source=b"payload",
+                        )
+                    ]
+                ),
+                output_root=output_root,
+                reporter=RecordingReporter(),
+            )
+
+            with self.assertRaises(RuntimeError):
+                asyncio.run(runner.run(channel_id=channel_id, full=False))
+
+            self.assertFalse((channel_root / "manifest.jsonl").exists())
+            self.assertFalse((channel_root / "checkpoint.json").exists())
+            self.assertFalse((channel_root / "videos" / "425.mp4").exists())
+            self.assertFalse((channel_root / "videos" / "425.mp4.part").exists())
 
     def test_first_run_downloads_media_and_updates_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

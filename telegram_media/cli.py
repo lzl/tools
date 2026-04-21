@@ -52,7 +52,7 @@ async def _run_download_command(channel_id: str, output_root: Path, *, full: boo
     client = await create_download_client()
     try:
         runner = DownloadChannelMediaRunner(
-            api=TelethonMediaApi(client),
+            api=TelethonMediaApi(client, output_root=output_root),
             output_root=output_root,
             reporter=ConsoleProgressReporter(),
         )

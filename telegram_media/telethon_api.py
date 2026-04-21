@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import math
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,8 +32,12 @@ from telegram_media.session import (
     prompt_phone,
 )
 
-PARALLEL_VIDEO_SHARD_COUNT = 10
+SAFE_PARALLEL_VIDEO_SHARD_COUNT = 4
+PARALLEL_VIDEO_SHARD_COUNT = SAFE_PARALLEL_VIDEO_SHARD_COUNT
+PARALLEL_VIDEO_MIN_BYTES = 64 * 1024 * 1024
 PARALLEL_VIDEO_REQUEST_SIZE = 512 * 1024
+RUNTIME_STATE_DIRNAME = "_runtime"
+RATE_LIMIT_FILENAME = "rate_limits.json"
 
 
 def _resolve_extension(message: types.Message, default: str) -> str:
@@ -51,11 +58,110 @@ def _format_wait_duration(seconds: int) -> str:
     return f"{remaining_seconds}s"
 
 
+class RateLimitStop(RuntimeError):
+    """Raised when Telegram rate limiting should fail the current run closed."""
+
+
+class RateLimitStore:
+    def __init__(self, output_root: Path, account_fingerprint: str) -> None:
+        self.path = output_root / RUNTIME_STATE_DIRNAME / RATE_LIMIT_FILENAME
+        self.account_fingerprint = account_fingerprint
+
+    def get_remaining_seconds(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+    ) -> int | None:
+        entries = self._load_entries()
+        key = self._build_key(
+            source_dc_id=source_dc_id,
+            target_dc_id=target_dc_id,
+            request_kind=request_kind,
+        )
+        entry = entries.get(key)
+        if entry is None:
+            return None
+
+        remaining_seconds = int(entry["wait_until"]) - int(time.time())
+        if remaining_seconds > 0:
+            return remaining_seconds
+
+        del entries[key]
+        self._save_entries(entries)
+        return None
+
+    def record_cooldown(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+        wait_seconds: int,
+    ) -> None:
+        entries = self._load_entries()
+        key = self._build_key(
+            source_dc_id=source_dc_id,
+            target_dc_id=target_dc_id,
+            request_kind=request_kind,
+        )
+        entries[key] = {
+            "account_fingerprint": self.account_fingerprint,
+            "source_dc_id": source_dc_id,
+            "target_dc_id": target_dc_id,
+            "request_kind": request_kind,
+            "wait_until": int(time.time()) + max(1, int(wait_seconds)),
+        }
+        self._save_entries(entries)
+
+    def _build_key(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+    ) -> str:
+        return (
+            f"{self.account_fingerprint}:"
+            f"{source_dc_id}:{target_dc_id}:{request_kind}"
+        )
+
+    def _load_entries(self) -> dict[str, dict[str, Any]]:
+        if not self.path.exists():
+            return {}
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            str(key): value
+            for key, value in payload.items()
+            if isinstance(value, dict)
+        }
+
+    def _save_entries(self, entries: dict[str, dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.path.with_suffix(".json.tmp")
+        temp_path.write_text(
+            json.dumps(entries, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(self.path)
+
+
 class TelethonMediaApi:
-    def __init__(self, client: TelegramClient) -> None:
+    def __init__(self, client: TelegramClient, *, output_root: Path = Path("data/telegram")) -> None:
         self.client = client
+        self.output_root = output_root
         self._parallel_auth_key_bytes: dict[int, bytes] = {}
         self._parallel_auth_key_lock = asyncio.Lock()
+        self._rate_limit_store = RateLimitStore(
+            output_root=output_root,
+            account_fingerprint=self._build_account_fingerprint(),
+        )
 
     async def iter_channel_messages(
         self,
@@ -89,7 +195,7 @@ class TelethonMediaApi:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> str | bytes | None:
         try:
-            if self._should_use_parallel_video_download(message):
+            if self.should_use_parallel_video_download(message):
                 try:
                     return await self._download_video_in_parallel(
                         message,
@@ -98,8 +204,18 @@ class TelethonMediaApi:
                     )
                 except DownloadInterrupted:
                     raise
+                except RateLimitStop:
+                    raise
+                except RPCError as exc:
+                    self._raise_for_rpc_error(
+                        exc,
+                        source_dc_id=self._session_dc_id(),
+                        target_dc_id=message.dc_id or self._session_dc_id(),
+                        request_kind="download",
+                        message=message,
+                    )
                 except Exception:
-                    return await self._download_video_single_with_cached_auth(
+                    return await self._download_media_single(
                         message,
                         destination,
                         progress_callback=progress_callback,
@@ -112,8 +228,16 @@ class TelethonMediaApi:
             )
         except DownloadInterrupted:
             raise
+        except RateLimitStop:
+            raise
         except RPCError as exc:
-            raise RuntimeError(self._describe_download_rpc_error(exc, message)) from exc
+            self._raise_for_rpc_error(
+                exc,
+                source_dc_id=self._session_dc_id(),
+                target_dc_id=message.dc_id or self._session_dc_id(),
+                request_kind="download",
+                message=message,
+            )
 
     def _describe_download_rpc_error(
         self,
@@ -142,58 +266,37 @@ class TelethonMediaApi:
         *,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> str | bytes | None:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        return await self.client.download_media(
-            message.source,
-            file=destination,
-            progress_callback=progress_callback,
+        self._raise_if_rate_limited(
+            source_dc_id=self._session_dc_id(),
+            target_dc_id=message.dc_id or self._session_dc_id(),
+            request_kind="download",
+            message=message,
         )
-
-    async def _download_video_single_with_cached_auth(
-        self,
-        message: ChannelMessage,
-        destination: Path,
-        *,
-        progress_callback: Callable[[int, int], None] | None = None,
-    ) -> str:
-        if message.file_size is None or message.input_location is None or message.dc_id is None:
-            return await self._download_media_single(
-                message,
-                destination,
-                progress_callback=progress_callback,
+        if self.is_cross_dc_message(message):
+            self._raise_if_rate_limited(
+                source_dc_id=self._session_dc_id(),
+                target_dc_id=message.dc_id or self._session_dc_id(),
+                request_kind="export_auth",
+                message=message,
             )
 
         destination.parent.mkdir(parents=True, exist_ok=True)
-        sender = await self._create_parallel_sender(message.dc_id)
-        downloaded = 0
-
         try:
-            with destination.open("wb") as destination_handle:
-                offset = 0
-                while True:
-                    chunk = await self._fetch_file_chunk(
-                        sender=sender,
-                        input_location=message.input_location,
-                        offset=offset,
-                        limit=PARALLEL_VIDEO_REQUEST_SIZE,
-                    )
-                    if not chunk:
-                        break
-                    destination_handle.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_callback is not None:
-                        progress_callback(downloaded, message.file_size)
-                    offset += len(chunk)
-                    if len(chunk) < PARALLEL_VIDEO_REQUEST_SIZE:
-                        break
-        except Exception:
+            return await self.client.download_media(
+                message.source,
+                file=destination,
+                progress_callback=progress_callback,
+            )
+        except RPCError as exc:
             if destination.exists():
                 destination.unlink()
-            raise
-        finally:
-            await self._disconnect_parallel_sender(sender, message.dc_id)
-
-        return str(destination)
+            self._raise_for_rpc_error(
+                exc,
+                source_dc_id=self._session_dc_id(),
+                target_dc_id=message.dc_id or self._session_dc_id(),
+                request_kind="download",
+                message=message,
+            )
 
     async def _download_video_in_parallel(
         self,
@@ -204,6 +307,12 @@ class TelethonMediaApi:
     ) -> str:
         if message.file_size is None or message.input_location is None or message.dc_id is None:
             raise RuntimeError("parallel video download requires file_size, dc_id, and input_location")
+        self._raise_if_rate_limited(
+            source_dc_id=self._session_dc_id(),
+            target_dc_id=message.dc_id,
+            request_kind="download",
+            message=message,
+        )
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         shard_dir = self._build_shard_dir(destination)
@@ -216,7 +325,7 @@ class TelethonMediaApi:
         tasks: list[asyncio.Task[None]] = []
 
         total_chunks = max(1, math.ceil(message.file_size / PARALLEL_VIDEO_REQUEST_SIZE))
-        worker_count = min(PARALLEL_VIDEO_SHARD_COUNT, total_chunks)
+        worker_count = min(SAFE_PARALLEL_VIDEO_SHARD_COUNT, total_chunks)
         chunk_ranges = self._build_chunk_ranges(
             file_size=message.file_size,
             worker_count=worker_count,
@@ -338,14 +447,29 @@ class TelethonMediaApi:
             source=message,
         )
 
-    def _should_use_parallel_video_download(self, message: ChannelMessage) -> bool:
+    def should_use_parallel_video_download(self, message: ChannelMessage) -> bool:
         return (
             message.media_type == "video"
             and message.file_size is not None
-            and message.file_size > 0
+            and message.file_size >= PARALLEL_VIDEO_MIN_BYTES
             and message.dc_id is not None
             and message.input_location is not None
+            and not self.is_cross_dc_message(message)
+            and not self._has_active_rate_limit(
+                source_dc_id=self._session_dc_id(),
+                target_dc_id=message.dc_id,
+                request_kind="download",
+            )
         )
+
+    def is_cross_dc_message(self, message: ChannelMessage) -> bool:
+        return message.dc_id is not None and message.dc_id != self._session_dc_id()
+
+    def classify_rpc_error(self, exc: RPCError) -> str:
+        error_name = type(exc).__name__.lower()
+        if isinstance(exc, FloodWaitError) or "flood" in error_name:
+            return "throttle"
+        return "rpc"
 
     def _build_shard_dir(self, destination: Path) -> Path:
         return destination.parent / f"{destination.name.removesuffix('.part')}.parts"
@@ -374,10 +498,24 @@ class TelethonMediaApi:
         if self.client.session.dc_id == dc_id:
             return AuthKey(bytes(self.client.session.auth_key.key))
 
+        self._raise_if_rate_limited(
+            source_dc_id=self._session_dc_id(),
+            target_dc_id=dc_id,
+            request_kind="export_auth",
+        )
+
         async with self._parallel_auth_key_lock:
             cached_key = self._parallel_auth_key_bytes.get(dc_id)
             if cached_key is None:
-                borrowed_sender = await self.client._borrow_exported_sender(dc_id)
+                try:
+                    borrowed_sender = await self.client._borrow_exported_sender(dc_id)
+                except RPCError as exc:
+                    self._raise_for_rpc_error(
+                        exc,
+                        source_dc_id=self._session_dc_id(),
+                        target_dc_id=dc_id,
+                        request_kind="export_auth",
+                    )
                 try:
                     if not borrowed_sender.auth_key or not borrowed_sender.auth_key.key:
                         raise RuntimeError(f"borrowed sender for dc {dc_id} has no auth key")
@@ -442,6 +580,117 @@ class TelethonMediaApi:
         if isinstance(result, types.upload.CdnFileReuploadNeeded):
             raise RuntimeError("parallel downloader does not support CDN reupload")
         return result.bytes
+
+    def _build_account_fingerprint(self) -> str:
+        auth_key = getattr(getattr(self.client, "session", None), "auth_key", None)
+        auth_key_bytes = getattr(auth_key, "key", None)
+        if not auth_key_bytes:
+            return "unknown-account"
+        return hashlib.sha256(bytes(auth_key_bytes)).hexdigest()[:16]
+
+    def _session_dc_id(self) -> int:
+        return int(getattr(getattr(self.client, "session", None), "dc_id", 0))
+
+    def _has_active_rate_limit(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+    ) -> bool:
+        return (
+            self._rate_limit_store.get_remaining_seconds(
+                source_dc_id=source_dc_id,
+                target_dc_id=target_dc_id,
+                request_kind=request_kind,
+            )
+            is not None
+        )
+
+    def _raise_if_rate_limited(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+        message: ChannelMessage | None = None,
+    ) -> None:
+        remaining_seconds = self._rate_limit_store.get_remaining_seconds(
+            source_dc_id=source_dc_id,
+            target_dc_id=target_dc_id,
+            request_kind=request_kind,
+        )
+        if remaining_seconds is None:
+            return
+        raise RateLimitStop(
+            self._describe_rate_limit(
+                source_dc_id=source_dc_id,
+                target_dc_id=target_dc_id,
+                request_kind=request_kind,
+                wait_seconds=remaining_seconds,
+                message=message,
+            )
+        )
+
+    def _raise_for_rpc_error(
+        self,
+        exc: RPCError,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+        message: ChannelMessage | None = None,
+    ) -> None:
+        if self.classify_rpc_error(exc) == "throttle":
+            wait_seconds = getattr(exc, "seconds", None)
+            if isinstance(wait_seconds, int) and wait_seconds > 0:
+                self._rate_limit_store.record_cooldown(
+                    source_dc_id=source_dc_id,
+                    target_dc_id=target_dc_id,
+                    request_kind=request_kind,
+                    wait_seconds=wait_seconds,
+                )
+            raise RateLimitStop(
+                self._describe_rate_limit(
+                    source_dc_id=source_dc_id,
+                    target_dc_id=target_dc_id,
+                    request_kind=request_kind,
+                    wait_seconds=wait_seconds,
+                    message=message,
+                )
+            ) from exc
+
+        if message is None:
+            raise RuntimeError(f"Telegram request failed: {exc}") from exc
+        raise RuntimeError(f"Telegram request failed while downloading message {message.message_id}: {exc}") from exc
+
+    def _describe_rate_limit(
+        self,
+        *,
+        source_dc_id: int,
+        target_dc_id: int,
+        request_kind: str,
+        wait_seconds: int | None,
+        message: ChannelMessage | None = None,
+    ) -> str:
+        if wait_seconds is None:
+            wait_clause = "Try again later."
+        else:
+            wait_clause = f"Retry in about {_format_wait_duration(wait_seconds)}."
+
+        if request_kind == "export_auth" or source_dc_id != target_dc_id:
+            return (
+                "Telegram is temporarily throttling cross-DC downloads "
+                f"from session DC {source_dc_id} to media DC {target_dc_id}. "
+                f"{wait_clause}"
+            )
+
+        if message is None:
+            return f"Telegram is temporarily throttling downloads. {wait_clause}"
+        return (
+            f"Telegram is temporarily throttling downloads for message {message.message_id}. "
+            f"{wait_clause}"
+        )
 
 
 async def create_download_client() -> TelegramClient:
