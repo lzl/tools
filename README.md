@@ -14,6 +14,47 @@ Each tool uses PEP 723 inline script metadata to declare dependencies, making th
 
 ## Available Tools
 
+### telegram-media
+
+Download all images and videos from a Telegram channel with Telethon, using
+`manifest.jsonl` and `checkpoint.json` for resume-safe incremental sync.
+
+Install or refresh the environment with:
+```bash
+uv sync
+```
+
+**Environment Variables:**
+- `TELEGRAM_API_ID`: Telegram API ID from https://my.telegram.org
+- `TELEGRAM_API_HASH`: Telegram API hash
+- `TELEGRAM_STRING_SESSION`: Non-interactive Telethon string session used for download runs
+
+**Examples:**
+```bash
+# One-time interactive bootstrap to generate TELEGRAM_STRING_SESSION
+uv run telegram-media generate-session
+
+# Incremental download with checkpoint resume
+uv run telegram-media download-channel-media \
+  --channel-id "$TELEGRAM_CHANNEL_ID" \
+  --output-root data/telegram
+
+# Force a full rescan while still deduping completed files
+uv run telegram-media download-channel-media \
+  --channel-id "$TELEGRAM_CHANNEL_ID" \
+  --output-root data/telegram \
+  --full
+```
+
+**Output Layout:**
+```text
+data/telegram/{channel_id}/
+  images/
+  videos/
+  manifest.jsonl
+  checkpoint.json
+```
+
 ### file-size
 
 Calculate the size of a file or directory.

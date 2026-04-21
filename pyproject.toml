@@ -1,13 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "tools"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "telethon>=1.41.2",
+]
+
+[project.scripts]
+telegram-media = "telegram_media.cli:main"
 
 [dependency-groups]
 dev = [
     "pyright>=1.1.408",
     "typeguard>=4.4.4",
 ]
+
+[tool.setuptools.packages.find]
+include = ["telegram_media*"]
