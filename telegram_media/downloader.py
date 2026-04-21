@@ -88,6 +88,7 @@ class ProgressReporter(Protocol):
         *,
         last_message_id: int | None,
         interrupted: bool,
+        failed: bool,
     ) -> None: ...
 
 
@@ -131,6 +132,7 @@ class NullProgressReporter:
         *,
         last_message_id: int | None,
         interrupted: bool,
+        failed: bool,
     ) -> None:
         return None
 
@@ -223,8 +225,15 @@ class ConsoleProgressReporter(NullProgressReporter):
         *,
         last_message_id: int | None,
         interrupted: bool,
+        failed: bool,
     ) -> None:
         self._flush_progress_line()
+        if failed:
+            if last_message_id is None:
+                self._write("Run failed before committing a new message.")
+            else:
+                self._write(f"Run failed after checkpointing message {last_message_id}.")
+            return
         if interrupted:
             if last_message_id is None:
                 self._write("Stopped immediately. No new messages were committed.")
@@ -412,6 +421,7 @@ class DownloadChannelMediaRunner:
         store = ChannelStore(self.output_root, normalized_channel_id)
         min_message_id = 0 if full else store.load_checkpoint()
         last_message_id: int | None = None
+        failed = False
 
         self.reporter.on_run_started(
             channel_id=normalized_channel_id,
@@ -436,11 +446,15 @@ class DownloadChannelMediaRunner:
                 last_message_id = message.message_id
                 if self.stop_signal.should_stop:
                     break
+        except Exception:
+            failed = True
+            raise
         finally:
             self.stop_signal.restore()
             self.reporter.on_run_finished(
                 last_message_id=last_message_id,
                 interrupted=self.stop_signal.should_stop,
+                failed=failed,
             )
 
     async def _process_message(self, store: ChannelStore, message: ChannelMessage) -> None:

@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from telethon import TelegramClient, functions, utils
+from telethon.crypto.authkey import AuthKey
 from telethon.errors import (
     ChannelPrivateError,
+    FloodWaitError,
     RPCError,
     SessionPasswordNeededError,
     UsernameInvalidError,
@@ -39,9 +41,21 @@ def _resolve_extension(message: types.Message, default: str) -> str:
     return default
 
 
+def _format_wait_duration(seconds: int) -> str:
+    minutes, remaining_seconds = divmod(seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {remaining_minutes}m {remaining_seconds}s"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
+
+
 class TelethonMediaApi:
     def __init__(self, client: TelegramClient) -> None:
         self.client = client
+        self._parallel_auth_key_bytes: dict[int, bytes] = {}
+        self._parallel_auth_key_lock = asyncio.Lock()
 
     async def iter_channel_messages(
         self,
@@ -74,27 +88,52 @@ class TelethonMediaApi:
         *,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> str | bytes | None:
-        if self._should_use_parallel_video_download(message):
-            try:
-                return await self._download_video_in_parallel(
-                    message,
-                    destination,
-                    progress_callback=progress_callback,
-                )
-            except DownloadInterrupted:
-                raise
-            except Exception:
-                return await self._download_media_single(
-                    message,
-                    destination,
-                    progress_callback=progress_callback,
-                )
+        try:
+            if self._should_use_parallel_video_download(message):
+                try:
+                    return await self._download_video_in_parallel(
+                        message,
+                        destination,
+                        progress_callback=progress_callback,
+                    )
+                except DownloadInterrupted:
+                    raise
+                except Exception:
+                    return await self._download_video_single_with_cached_auth(
+                        message,
+                        destination,
+                        progress_callback=progress_callback,
+                    )
 
-        return await self._download_media_single(
-            message,
-            destination,
-            progress_callback=progress_callback,
-        )
+            return await self._download_media_single(
+                message,
+                destination,
+                progress_callback=progress_callback,
+            )
+        except DownloadInterrupted:
+            raise
+        except RPCError as exc:
+            raise RuntimeError(self._describe_download_rpc_error(exc, message)) from exc
+
+    def _describe_download_rpc_error(
+        self,
+        exc: RPCError,
+        message: ChannelMessage,
+    ) -> str:
+        if isinstance(exc, FloodWaitError):
+            session_dc_id = getattr(getattr(self.client, "session", None), "dc_id", None)
+            if message.dc_id is not None and session_dc_id not in (None, message.dc_id):
+                return (
+                    "Telegram is temporarily throttling cross-DC downloads "
+                    f"from session DC {session_dc_id} to media DC {message.dc_id}. "
+                    f"Retry in about {_format_wait_duration(exc.seconds)}."
+                )
+            return (
+                "Telegram is temporarily throttling downloads. "
+                f"Retry in about {_format_wait_duration(exc.seconds)}."
+            )
+
+        return f"Telegram request failed while downloading message {message.message_id}: {exc}"
 
     async def _download_media_single(
         self,
@@ -109,6 +148,52 @@ class TelethonMediaApi:
             file=destination,
             progress_callback=progress_callback,
         )
+
+    async def _download_video_single_with_cached_auth(
+        self,
+        message: ChannelMessage,
+        destination: Path,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> str:
+        if message.file_size is None or message.input_location is None or message.dc_id is None:
+            return await self._download_media_single(
+                message,
+                destination,
+                progress_callback=progress_callback,
+            )
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        sender = await self._create_parallel_sender(message.dc_id)
+        downloaded = 0
+
+        try:
+            with destination.open("wb") as destination_handle:
+                offset = 0
+                while True:
+                    chunk = await self._fetch_file_chunk(
+                        sender=sender,
+                        input_location=message.input_location,
+                        offset=offset,
+                        limit=PARALLEL_VIDEO_REQUEST_SIZE,
+                    )
+                    if not chunk:
+                        break
+                    destination_handle.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback is not None:
+                        progress_callback(downloaded, message.file_size)
+                    offset += len(chunk)
+                    if len(chunk) < PARALLEL_VIDEO_REQUEST_SIZE:
+                        break
+        except Exception:
+            if destination.exists():
+                destination.unlink()
+            raise
+        finally:
+            await self._disconnect_parallel_sender(sender, message.dc_id)
+
+        return str(destination)
 
     async def _download_video_in_parallel(
         self,
@@ -282,32 +367,51 @@ class TelethonMediaApi:
         return ranges
 
     async def _create_parallel_sender(self, dc_id: int):
-        if self.client.session.dc_id == dc_id:
-            dc = await self.client._get_dc(dc_id)
-            sender = MTProtoSender(
-                self.client.session.auth_key,
-                loggers=self.client._log,
-                retries=self.client._connection_retries,
-                delay=self.client._retry_delay,
-                auto_reconnect=self.client._auto_reconnect,
-                connect_timeout=self.client._timeout,
-                auth_key_callback=self.client._auth_key_callback,
-                updates_queue=self.client._updates_queue,
-                auto_reconnect_callback=self.client._handle_auto_reconnect,
-            )
-            await sender.connect(
-                self.client._connection(
-                    dc.ip_address,
-                    dc.port,
-                    dc.id,
-                    loggers=self.client._log,
-                    proxy=self.client._proxy,
-                    local_addr=self.client._local_addr,
-                )
-            )
-            return sender
+        auth_key = await self._get_parallel_auth_key(dc_id)
+        return await self._connect_parallel_sender(dc_id, auth_key)
 
-        return await self.client._create_exported_sender(dc_id)
+    async def _get_parallel_auth_key(self, dc_id: int) -> AuthKey:
+        if self.client.session.dc_id == dc_id:
+            return AuthKey(bytes(self.client.session.auth_key.key))
+
+        async with self._parallel_auth_key_lock:
+            cached_key = self._parallel_auth_key_bytes.get(dc_id)
+            if cached_key is None:
+                borrowed_sender = await self.client._borrow_exported_sender(dc_id)
+                try:
+                    if not borrowed_sender.auth_key or not borrowed_sender.auth_key.key:
+                        raise RuntimeError(f"borrowed sender for dc {dc_id} has no auth key")
+                    cached_key = bytes(borrowed_sender.auth_key.key)
+                    self._parallel_auth_key_bytes[dc_id] = cached_key
+                finally:
+                    await self.client._return_exported_sender(borrowed_sender)
+
+        return AuthKey(cached_key)
+
+    async def _connect_parallel_sender(self, dc_id: int, auth_key: AuthKey):
+        dc = await self.client._get_dc(dc_id)
+        sender = MTProtoSender(
+            auth_key,
+            loggers=self.client._log,
+            retries=self.client._connection_retries,
+            delay=self.client._retry_delay,
+            auto_reconnect=self.client._auto_reconnect,
+            connect_timeout=self.client._timeout,
+            auth_key_callback=self.client._auth_key_callback,
+            updates_queue=self.client._updates_queue,
+            auto_reconnect_callback=self.client._handle_auto_reconnect,
+        )
+        await sender.connect(
+            self.client._connection(
+                dc.ip_address,
+                dc.port,
+                dc.id,
+                loggers=self.client._log,
+                proxy=self.client._proxy,
+                local_addr=self.client._local_addr,
+            )
+        )
+        return sender
 
     async def _disconnect_parallel_sender(self, sender: Any, dc_id: int) -> None:
         try:
