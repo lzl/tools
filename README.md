@@ -238,6 +238,41 @@ yt-dlp --list-subs "https://www.bilibili.com/video/BV1xx411c7XW"
 - Place a `cookies.txt` file in the current directory (required for AI subtitles)
 - Common language codes: `ai-zh` (AI Chinese), `ai-en` (AI English), `zh-Hans`, `zh-Hant`
 
+### douyin-user-download
+
+Download public posted videos from a Douyin user profile URL or raw `sec_user_id`.
+The tool keeps a manifest and checkpoint so repeated runs skip completed files.
+
+**Examples:**
+```bash
+# Download all public posted videos to data/douyin_downloads/
+uv run douyin_user_download.py \
+  "https://www.douyin.com/user/MS4wLjABAAAAlCw8i2Klk3i7azZMk2lhdf4R3LXUSI4PP-e7DV0BfwcJNQeehP-VUwz4h3Bh-Y6v"
+
+# Test discovery without writing media files
+uv run douyin_user_download.py "<douyin-user-url>" ./data/douyin_downloads --max-count 1 --dry-run
+
+# Use exported cookies if Douyin requires login for a profile
+uv run douyin_user_download.py "<douyin-user-url>" ./data/douyin_downloads --cookie-file cookies.txt
+```
+
+**Cookie Notes:**
+- Without login cookies, Douyin may expose only the first page of a profile. In
+  that case the tool exits with a login-limited message instead of silently
+  treating the first page as complete.
+- If a `cookies.txt` file exists in the current directory, the tool loads it
+  automatically. Use `--cookie` or `--cookie-file` to override that default.
+- `--cookie-file` accepts either a raw Cookie header (`name=value; name2=value2`)
+  or a Netscape-format `cookies.txt` export for `douyin.com`.
+
+**Output Layout:**
+```text
+data/douyin_downloads/{sec_user_id}/
+  videos/
+  manifest.jsonl
+  checkpoint.json
+```
+
 ### jable-download (Rust)
 
 Download videos from jable.tv with automatic Cloudflare bypass.
