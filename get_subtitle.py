@@ -30,6 +30,7 @@ SEGMENT_SECONDS = 25 * 60
 
 # Maximum parallel transcription workers
 MAX_TRANSCRIBE_WORKERS = 4
+DEFAULT_FRAGMENT_CONCURRENCY = 20
 
 
 @dataclass
@@ -303,7 +304,8 @@ def download_audio(
     video_url: str,
     temp_dir: Path,
     cookies_file: Optional[Path] = None,
-    browser: Optional[str] = None
+    browser: Optional[str] = None,
+    concurrent_fragments: int = DEFAULT_FRAGMENT_CONCURRENCY,
 ) -> Path:
     """Download audio file using download_audio.py tool"""
     print("\n=== Step 2: Downloading audio ===")
@@ -319,6 +321,8 @@ def download_audio(
     
     if browser:
         cmd.extend(["--browser", browser])
+
+    cmd.extend(["--concurrent-fragments", str(concurrent_fragments)])
     
     try:
         subprocess.run(cmd, check=True, capture_output=False)
@@ -600,27 +604,45 @@ def transcribe_audio(
         raise RuntimeError(f"Failed to transcribe audio (exit code {e.returncode})")
 
 
-def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
+def parse_fragment_concurrency(value: str) -> int:
+    """Parse a positive fragment concurrency value."""
+    try:
+        concurrency = int(value)
+    except ValueError:
+        print(f"Invalid --concurrent-fragments value: {value}")
+        sys.exit(1)
+
+    if concurrency < 1:
+        print("--concurrent-fragments must be at least 1")
+        sys.exit(1)
+
+    return concurrency
+
+
+def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str], int]:
     """
     Parse command line arguments.
     
     Returns:
-        Tuple of (video_url, output_dir, browser_name)
+        Tuple of (video_url, output_dir, browser_name, concurrent_fragments)
     """
     if len(argv) < 2:
-        print("Usage: get_subtitle <video_url> [output_directory] [--browser BROWSER]")
+        print("Usage: get_subtitle <video_url> [output_directory] [--browser BROWSER] [--concurrent-fragments N]")
         print("\nExample:")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ ./custom_dir")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ --browser chrome")
         print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ ./custom_dir --browser firefox")
+        print("  get_subtitle https://www.youtube.com/watch?v=dQw4w9WgXcQ --concurrent-fragments 40")
         print("\nSupported browsers: chrome, firefox, safari, edge, opera, brave, chromium, vivaldi")
         print("\nNote: If YouTube blocks the request, use --browser to authenticate with your browser cookies.")
+        print(f"Default fragment concurrency for HLS/DASH downloads: {DEFAULT_FRAGMENT_CONCURRENCY}")
         sys.exit(1)
     
     video_url = argv[1]
     output_dir = Path("output_dir")
     browser: Optional[str] = None
+    concurrent_fragments = DEFAULT_FRAGMENT_CONCURRENCY
     
     # Parse remaining arguments
     i = 2
@@ -629,6 +651,9 @@ def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
         if arg == "--browser" and i + 1 < len(argv):
             browser = argv[i + 1]
             i += 2
+        elif arg in ("--concurrent-fragments", "-N") and i + 1 < len(argv):
+            concurrent_fragments = parse_fragment_concurrency(argv[i + 1])
+            i += 2
         elif not arg.startswith("--"):
             output_dir = Path(arg)
             i += 1
@@ -636,13 +661,13 @@ def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
             print(f"Unknown argument: {arg}")
             sys.exit(1)
     
-    return video_url, output_dir, browser
+    return video_url, output_dir, browser, concurrent_fragments
 
 
 @typechecked
 def main() -> None:
     """Get subtitle for a video URL by downloading or transcribing"""
-    video_url, output_dir, browser = parse_args(sys.argv)
+    video_url, output_dir, browser, concurrent_fragments = parse_args(sys.argv)
     
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -652,6 +677,7 @@ def main() -> None:
     
     print(f"Video URL: {video_url}")
     print(f"Output directory: {output_dir.absolute()}")
+    print(f"HLS/DASH fragment concurrency: {concurrent_fragments}")
     if browser:
         print(f"Using cookies from browser: {browser}")
     elif cookies_file and cookies_file.exists():
@@ -684,6 +710,7 @@ def main() -> None:
             temp_dir,
             cookies_file,
             browser,
+            concurrent_fragments,
             max_retries=2,
             delay=5,
             step_name="Downloading audio"
