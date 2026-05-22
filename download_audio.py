@@ -14,6 +14,7 @@ from typing import Optional
 from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
 
 STREAMING_FRAGMENT_CONCURRENCY = 20
+MIN_SIZE_FORMAT_SORT = "+size,+br,+res,+fps"
 
 
 def parse_args(argv: list[str]) -> tuple[str, Path, Optional[str]]:
@@ -59,12 +60,15 @@ def build_download_command(video_url: str, output_dir: Path) -> list[str]:
     Build the yt-dlp download command.
 
     `-N` is only meaningful for fragmented downloads, so keeping it on the
-    command line preserves the simple `worstaudio` flow while speeding up
-    HLS/DASH cases.
+    command line preserves the simple audio-first flow while speeding up
+    HLS/DASH cases. Prefer the smallest audio-only format; if a site exposes
+    only combined video/audio formats, fall back to the smallest combined one.
     """
     return yt_dlp_command(
         video_url,
-        "-f", "worstaudio",
+        "-f", "bestaudio/best",
+        "-S", MIN_SIZE_FORMAT_SORT,
+        "--format-sort-force",
         "-o", str(output_dir / "%(title)s.%(ext)s"),
         "--no-mtime",
         "--remote-components", "ejs:github",
