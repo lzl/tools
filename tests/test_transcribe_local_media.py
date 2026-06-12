@@ -33,7 +33,7 @@ class InputFileTests(unittest.TestCase):
             temp_dir = Path(temp_dir_name)
             ignored = temp_dir / "book.epub"
             older = temp_dir / "older.mp3"
-            newer = temp_dir / "newer.mp4"
+            newer = temp_dir / "newer.mkv"
 
             ignored.write_text("book")
             older.write_bytes(b"old")
@@ -48,6 +48,13 @@ class InputFileTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 resolve_input_file(path)
+
+    def test_resolve_input_file_accepts_mkv(self) -> None:
+        with TemporaryDirectory() as temp_dir_name:
+            path = Path(temp_dir_name) / "demo.mkv"
+            path.write_bytes(b"mkv")
+
+            self.assertEqual(resolve_input_file(path), path)
 
 
 class CompressionTests(unittest.TestCase):

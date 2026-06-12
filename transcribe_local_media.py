@@ -40,6 +40,7 @@ MEDIA_EXTENSIONS = {
     ".mp4",
     ".m4v",
     ".mov",
+    ".mkv",
     ".mpeg",
     ".mpga",
 }
