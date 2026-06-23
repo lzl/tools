@@ -68,6 +68,30 @@ uv run file_size.py README.md
 uv run file_size.py .
 ```
 
+### upgrade-yt-dlp
+
+Manually upgrade the standalone `yt-dlp` executable from the latest GitHub release.
+The tool resolves `https://github.com/yt-dlp/yt-dlp/releases/latest`, compares it
+with the local `yt-dlp --version`, and skips downloading when the installed version
+is already current. When an upgrade is needed, it downloads `yt-dlp` and
+`SHA2-256SUMS`, verifies the SHA256 checksum, backs up the old executable next to
+the original, and replaces it.
+
+**Examples:**
+```bash
+# Check and upgrade the best yt-dlp found on PATH
+uv run upgrade_yt_dlp.py
+
+# Check without downloading or changing files
+uv run upgrade_yt_dlp.py --dry-run
+
+# Upgrade a specific executable path
+uv run upgrade_yt_dlp.py --target ~/.local/bin/yt-dlp
+
+# Reinstall the latest release even if versions already match
+uv run upgrade_yt_dlp.py --force
+```
+
 ### epub-vocab-html
 
 Extract unknown words and phrases from an English EPUB and generate an HTML study page with translations.
