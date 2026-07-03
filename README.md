@@ -68,6 +68,55 @@ uv run file_size.py README.md
 uv run file_size.py .
 ```
 
+### extract-nude-scenes
+
+Detect exposed nudity in a video, cut the matching time ranges, and merge them
+into a single review video. The tool samples frames with `ffmpeg`, runs NudeNet
+on the sampled frames, writes a CSV/JSON detection manifest, and renders the
+matched scenes with `ffmpeg`.
+
+Only run this on material where every depicted person is an adult and where you
+have the right to process the file.
+
+**Requirements:**
+- `ffmpeg` and `ffprobe` on `PATH`
+- Python dependencies are declared inline and installed by `uv run`
+
+**Examples:**
+```bash
+# Auto-select the latest supported video from input_dir/
+uv run extract_nude_scenes.py
+
+# Process an explicit file
+uv run extract_nude_scenes.py "input_dir/video.mp4"
+
+# Re-run the checked sample explicitly
+uv run extract_nude_scenes.py "input_dir/#loveu22 温心 2026-07-02.mp4"
+
+# More complete but slower detection
+uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 1 --threshold 0.4
+
+# Faster/coarser detection
+uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 0.25 --threshold 0.5
+```
+
+**Outputs:**
+```text
+output_dir/{input_stem}_nude_scenes.mp4   # merged video
+output_dir/{input_stem}_nude_scenes.csv   # segments and per-frame hits
+output_dir/{input_stem}_nude_scenes.json  # summary metadata
+```
+
+Useful tuning flags:
+- `--sample-fps`: detection sampling rate. Higher catches more brief shots but
+  takes longer.
+- `--threshold`: model confidence threshold. Lower finds more candidates but may
+  include more false positives.
+- `--padding`: seconds added around each positive sample.
+- `--merge-gap`: nearby hits closer than this many seconds are merged.
+- `--classes`: NudeNet classes to include. Defaults to exposed breasts,
+  exposed genitalia, and exposed anus.
+
 ### upgrade-yt-dlp
 
 Manually upgrade the standalone `yt-dlp` executable from the latest GitHub release.
