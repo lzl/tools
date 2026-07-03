@@ -187,6 +187,28 @@ class TelethonMediaApi:
         except RPCError as exc:
             raise RuntimeError(f"Telegram request failed: {exc}") from exc
 
+    async def get_channel_message(
+        self,
+        channel_id: int | str,
+        *,
+        message_id: int,
+    ) -> ChannelMessage | None:
+        try:
+            entity = await self.client.get_entity(channel_id)
+            raw_message = await self.client.get_messages(entity, ids=message_id)
+            if raw_message is None:
+                return None
+            return self._to_channel_message(channel_id, raw_message)
+        except (ChannelPrivateError, UsernameInvalidError, UsernameNotOccupiedError) as exc:
+            raise RuntimeError(
+                "The authenticated account cannot access this channel. "
+                "Check TELEGRAM_STRING_SESSION and channel visibility."
+            ) from exc
+        except ValueError as exc:
+            raise RuntimeError(f"Could not resolve Telegram channel {channel_id!r}.") from exc
+        except RPCError as exc:
+            raise RuntimeError(f"Telegram request failed: {exc}") from exc
+
     async def download_media(
         self,
         message: ChannelMessage,

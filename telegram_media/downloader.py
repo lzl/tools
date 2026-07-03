@@ -46,6 +46,13 @@ class TelegramMediaApi(Protocol):
         min_message_id: int,
     ): ...
 
+    async def get_channel_message(
+        self,
+        channel_id: int | str,
+        *,
+        message_id: int,
+    ) -> ChannelMessage | None: ...
+
     async def download_media(
         self,
         message: ChannelMessage,

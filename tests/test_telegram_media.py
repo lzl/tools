@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 from telethon.crypto.authkey import AuthKey
 from telethon.errors import FloodWaitError
 
-from telegram_media.cli import build_parser
+from telegram_media.cli import build_parser, parse_message_link
 from telegram_media.downloader import (
     ChannelMessage,
     ConsoleProgressReporter,
@@ -294,6 +294,34 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.channel_id, "-1234567890")
         self.assertEqual(args.output_root, Path("data/telegram"))
         self.assertFalse(args.full)
+
+    def test_download_message_subcommand_accepts_links(self) -> None:
+        parser = build_parser()
+
+        args = parser.parse_args(
+            [
+                "download-message-media",
+                "https://t.me/c/1234567890/42",
+                "--output-root",
+                "input_dir",
+            ]
+        )
+
+        self.assertEqual(args.command, "download-message-media")
+        self.assertEqual(args.links, ["https://t.me/c/1234567890/42"])
+        self.assertEqual(args.output_root, Path("input_dir"))
+
+    def test_parse_private_message_link(self) -> None:
+        link = parse_message_link("https://t.me/c/1234567890/42")
+
+        self.assertEqual(link.channel_id, -1001234567890)
+        self.assertEqual(link.message_id, 42)
+
+    def test_parse_public_message_link(self) -> None:
+        link = parse_message_link("https://t.me/example_channel/42")
+
+        self.assertEqual(link.channel_id, "example_channel")
+        self.assertEqual(link.message_id, 42)
 
 
 class TelethonMediaApiTests(unittest.TestCase):
