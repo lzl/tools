@@ -94,7 +94,7 @@ uv run extract_nude_scenes.py "input_dir/video.mp4"
 uv run extract_nude_scenes.py "input_dir/#loveu22 温心 2026-07-02.mp4"
 
 # More complete but slower detection
-uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 1 --threshold 0.4
+uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 3 --exposed-threshold 0.25
 
 # Faster/coarser detection
 uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 0.25 --threshold 0.5
@@ -112,6 +112,9 @@ Useful tuning flags:
   takes longer.
 - `--threshold`: model confidence threshold. Lower finds more candidates but may
   include more false positives.
+- `--exposed-threshold`: confidence threshold for exposed nudity classes. This
+  defaults lower than `--threshold` because brief explicit frames are often
+  scored below the general threshold.
 - `--padding`: seconds added around each positive sample.
 - `--merge-gap`: nearby hits closer than this many seconds are merged.
 - `--classes`: NudeNet classes to include. Defaults to exposed breasts,

@@ -50,6 +50,7 @@ DEFAULT_CLASSES = {
     "FEMALE_GENITALIA_EXPOSED",
     "MALE_GENITALIA_EXPOSED",
 }
+DEFAULT_EXPOSED_THRESHOLD = 0.3
 
 
 def log(message: str) -> None:
@@ -185,6 +186,7 @@ def detect_hits(
     sample_fps: float,
     labels: set[str],
     threshold: float,
+    class_thresholds: dict[str, float],
 ) -> list[DetectionHit]:
     hits: list[DetectionHit] = []
     for index, frame in enumerate(frames, start=1):
@@ -192,7 +194,8 @@ def detect_hits(
         matching = [
             item
             for item in detections
-            if item.get("class") in labels and float(item.get("score", 0.0)) >= threshold
+            if item.get("class") in labels
+            and float(item.get("score", 0.0)) >= class_thresholds.get(str(item.get("class")), threshold)
         ]
         if matching:
             best = max(matching, key=lambda item: float(item.get("score", 0.0)))
@@ -378,8 +381,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", nargs="?", type=Path, default=None, help="Path to video file (default: latest in input_dir/).")
     parser.add_argument("-o", "--output", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--sample-fps", type=float, default=0.5, help="Frame sample rate for detection.")
+    parser.add_argument("--sample-fps", type=float, default=2.0, help="Frame sample rate for detection.")
     parser.add_argument("--threshold", type=float, default=0.45, help="Detection score threshold.")
+    parser.add_argument(
+        "--exposed-threshold",
+        type=float,
+        default=DEFAULT_EXPOSED_THRESHOLD,
+        help="Default confidence threshold for exposed nudity classes.",
+    )
     parser.add_argument("--padding", type=float, default=2.0, help="Seconds added before and after each hit.")
     parser.add_argument("--merge-gap", type=float, default=4.0, help="Merge segments separated by this many seconds.")
     parser.add_argument("--min-segment", type=float, default=1.0, help="Drop shorter merged segments.")
@@ -398,6 +407,8 @@ def main() -> None:
         raise SystemExit("--sample-fps must be greater than 0")
     if not 0 <= args.threshold <= 1:
         raise SystemExit("--threshold must be between 0 and 1")
+    if not 0 <= args.exposed_threshold <= 1:
+        raise SystemExit("--exposed-threshold must be between 0 and 1")
 
     require_binary("ffmpeg")
     require_binary("ffprobe")
@@ -419,7 +430,12 @@ def main() -> None:
         frames = extract_sample_frames(input_path, work_dir / "frames", args.sample_fps, args.max_width)
         log(f"Extracted {len(frames)} sampled frames")
         detector = NudeDetector()
-        hits = detect_hits(frames, detector, args.sample_fps, set(args.classes), args.threshold)
+        class_thresholds = {
+            label: args.exposed_threshold
+            for label in DEFAULT_CLASSES
+            if label in set(args.classes)
+        }
+        hits = detect_hits(frames, detector, args.sample_fps, set(args.classes), args.threshold, class_thresholds)
         segments = build_segments(
             hits,
             duration,
@@ -444,6 +460,8 @@ def main() -> None:
             "duration": duration,
             "sample_fps": args.sample_fps,
             "threshold": args.threshold,
+            "exposed_threshold": args.exposed_threshold,
+            "class_thresholds": class_thresholds,
             "classes": args.classes,
             "hit_count": len(hits),
             "segment_count": len(segments),
