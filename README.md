@@ -93,8 +93,8 @@ uv run extract_nude_scenes.py "input_dir/video.mp4"
 # Re-run the checked sample explicitly
 uv run extract_nude_scenes.py "input_dir/#loveu22 温心 2026-07-02.mp4"
 
-# More complete but slower detection
-uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 3 --exposed-threshold 0.25
+# More sensitive but potentially noisier detection
+uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 4 --max-width 1280 --exposed-threshold 0.12
 
 # Faster/coarser detection
 uv run extract_nude_scenes.py "input_dir/video.mp4" --sample-fps 0.25 --threshold 0.5
@@ -119,6 +119,10 @@ Useful tuning flags:
 - `--merge-gap`: nearby hits closer than this many seconds are merged.
 - `--classes`: NudeNet classes to include. Defaults to exposed breasts,
   exposed genitalia, and exposed anus.
+
+The default extraction strategy is tuned for conservative explicit-scene
+extraction: `--sample-fps 2 --max-width 640 --exposed-threshold 0.3 --padding 3
+--merge-gap 4`.
 
 ### upgrade-yt-dlp
 

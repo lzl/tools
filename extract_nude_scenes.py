@@ -389,7 +389,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_EXPOSED_THRESHOLD,
         help="Default confidence threshold for exposed nudity classes.",
     )
-    parser.add_argument("--padding", type=float, default=2.0, help="Seconds added before and after each hit.")
+    parser.add_argument("--padding", type=float, default=3.0, help="Seconds added before and after each hit.")
     parser.add_argument("--merge-gap", type=float, default=4.0, help="Merge segments separated by this many seconds.")
     parser.add_argument("--min-segment", type=float, default=1.0, help="Drop shorter merged segments.")
     parser.add_argument("--max-width", type=int, default=640, help="Scale sampled frames to this max width.")
