@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
 MediaType = Literal["image", "video"]
+ProcessMessageStatus = Literal["downloaded", "skipped", "manifest_backfilled"]
 
 
 class DownloadInterrupted(Exception):
@@ -36,6 +37,13 @@ class ManifestRecord:
     file_id: str
     file_path: str
     status: str
+
+
+@dataclass(frozen=True)
+class ProcessMessageResult:
+    status: ProcessMessageStatus
+    final_path: Path | None
+    record: ManifestRecord | None
 
 
 class TelegramMediaApi(Protocol):
@@ -446,7 +454,7 @@ class DownloadChannelMediaRunner:
                 if self.stop_signal.should_stop:
                     break
                 try:
-                    await self._process_message(store, message)
+                    await self.process_message(store, message)
                 except DownloadInterrupted:
                     break
                 store.checkpoint(message.message_id)
@@ -464,9 +472,13 @@ class DownloadChannelMediaRunner:
                 failed=failed,
             )
 
-    async def _process_message(self, store: ChannelStore, message: ChannelMessage) -> None:
+    async def process_message(
+        self,
+        store: ChannelStore,
+        message: ChannelMessage,
+    ) -> ProcessMessageResult:
         if message.media_type is None or message.file_id is None or message.extension is None:
-            return
+            return ProcessMessageResult(status="skipped", final_path=None, record=None)
 
         final_path, temp_path = store.build_file_paths(message)
         final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -474,12 +486,21 @@ class DownloadChannelMediaRunner:
 
         if complete_record is not None and final_path.exists():
             self.reporter.on_existing_file_skipped(message=message, final_path=final_path)
-            return
+            return ProcessMessageResult(
+                status="skipped",
+                final_path=final_path,
+                record=complete_record,
+            )
 
         if final_path.exists() and complete_record is None:
-            store.append_manifest(store.build_record(message, final_path))
+            record = store.build_record(message, final_path)
+            store.append_manifest(record)
             self.reporter.on_manifest_backfilled(message=message, final_path=final_path)
-            return
+            return ProcessMessageResult(
+                status="manifest_backfilled",
+                final_path=final_path,
+                record=record,
+            )
 
         if temp_path.exists():
             temp_path.unlink()
@@ -517,8 +538,17 @@ class DownloadChannelMediaRunner:
                 temp_path.unlink()
             raise
 
-        store.append_manifest(store.build_record(message, final_path))
+        record = store.build_record(message, final_path)
+        store.append_manifest(record)
         self.reporter.on_download_completed(message=message, final_path=final_path)
+        return ProcessMessageResult(
+            status="downloaded",
+            final_path=final_path,
+            record=record,
+        )
+
+    async def _process_message(self, store: ChannelStore, message: ChannelMessage) -> None:
+        await self.process_message(store, message)
 
     def _resolve_produced_path(
         self,

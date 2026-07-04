@@ -16,6 +16,7 @@ from telethon.errors import FloodWaitError
 from telegram_media.cli import build_parser, parse_message_link
 from telegram_media.downloader import (
     ChannelMessage,
+    ChannelStore,
     ConsoleProgressReporter,
     DownloadInterrupted,
     DownloadChannelMediaRunner,
@@ -1009,6 +1010,58 @@ class DownloadChannelMediaRunnerTests(unittest.TestCase):
             ]
             self.assertEqual(len(manifest_rows), 1)
             self.assertEqual(manifest_rows[0]["status"], "complete")
+
+    def test_public_process_message_reports_download_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            channel_id = -1001234567890
+            message = ChannelMessage(
+                channel_id=channel_id,
+                message_id=2,
+                media_type="image",
+                file_id="image-2",
+                extension=".jpg",
+                source=b"fresh",
+            )
+            api = FakeTelegramApi([message])
+            runner = DownloadChannelMediaRunner(api=api, output_root=output_root)
+            store = ChannelStore(output_root, channel_id)
+
+            first = asyncio.run(runner.process_message(store, message))
+            second = asyncio.run(runner.process_message(store, message))
+
+            self.assertEqual(first.status, "downloaded")
+            self.assertEqual(second.status, "skipped")
+            self.assertEqual(first.final_path, output_root / str(channel_id) / "images" / "2.jpg")
+            self.assertIsNotNone(first.record)
+
+    def test_public_process_message_reports_manifest_backfill_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            channel_id = -1001234567890
+            channel_root = output_root / str(channel_id)
+            image_path = channel_root / "images" / "2.jpg"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"existing")
+            message = ChannelMessage(
+                channel_id=channel_id,
+                message_id=2,
+                media_type="image",
+                file_id="image-2",
+                extension=".jpg",
+                source=b"fresh",
+            )
+            runner = DownloadChannelMediaRunner(
+                api=FakeTelegramApi([message]),
+                output_root=output_root,
+            )
+            store = ChannelStore(output_root, channel_id)
+
+            result = asyncio.run(runner.process_message(store, message))
+
+            self.assertEqual(result.status, "manifest_backfilled")
+            self.assertEqual(result.final_path, image_path)
+            self.assertIsNotNone(result.record)
 
     def test_missing_file_is_redownloaded_even_if_manifest_claims_complete(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

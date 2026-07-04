@@ -142,7 +142,7 @@ async def _run_download_messages_command(links: Sequence[str], output_root: Path
             if message is None:
                 print(f"Message not found: {link.channel_id}/{link.message_id}", file=sys.stderr)
                 continue
-            await runner._process_message(store, message)
+            await runner.process_message(store, message)
             last_message_id = link.message_id
         reporter.on_run_finished(
             last_message_id=last_message_id,
