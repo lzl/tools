@@ -126,6 +126,9 @@ Rules:
 - Defaults should be safe and predictable.
 - `--json` means stdout contains one JSON object and nothing else.
 - Human progress, warnings, and errors go to stderr.
+- Progress logs should be useful but quiet: throttle noisy callbacks by
+  percentage, time interval, or item count instead of printing every low-level
+  chunk.
 - Nonzero exit means failure.
 
 Never mix logs with JSON stdout. Workflows parse stdout; one stray progress line
@@ -347,6 +350,20 @@ Problem: atom logs are captured but not shown, so long-running workflows look
 stalled.
 Fix: capture stdout for JSON parsing, but relay atom stderr to workflow stderr
 in real time. Workflow progress messages should also go to stderr.
+
+Unthrottled progress callbacks:
+
+```text
+Message 163174: 262144 / 235354021 bytes
+Message 163174: 524288 / 235354021 bytes
+Message 163174: 786432 / 235354021 bytes
+```
+
+Problem: byte or chunk-level callbacks can print hundreds or thousands of
+lines, making the workflow hard to read and hiding important errors.
+Fix: aggregate progress before logging. For downloads, print human-scale
+milestones such as `5%`, `10%`, and `100%`, optionally with formatted byte
+totals. Keep the final completion line separate, for example `Saved ...`.
 
 ## Minimal Atom Skeleton
 
