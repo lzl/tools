@@ -316,6 +316,7 @@ class RenderVideoSegmentsAtomTests(unittest.TestCase):
                     crf=21,
                     preset="fast",
                     keep_work_dir=False,
+                    work_dir_root=None,
                 )
 
             self.assertEqual(result["segment_count"], 2)
@@ -347,6 +348,7 @@ class RenderVideoSegmentsAtomTests(unittest.TestCase):
                     crf=20,
                     preset="veryfast",
                     keep_work_dir=False,
+                    work_dir_root=None,
                 )
 
             self.assertTrue(result["placeholder"])
@@ -367,6 +369,7 @@ class RenderVideoSegmentsAtomTests(unittest.TestCase):
                     crf=20,
                     preset="veryfast",
                     keep_work_dir=False,
+                    work_dir_root=None,
                 )
 
             input_path = root / "input.mp4"
@@ -380,6 +383,7 @@ class RenderVideoSegmentsAtomTests(unittest.TestCase):
                         crf=20,
                         preset="veryfast",
                         keep_work_dir=False,
+                        work_dir_root=None,
                     )
 
 
@@ -390,16 +394,20 @@ class TelegramNudeScenesWorkflowTests(unittest.TestCase):
         def fake_run_atom(atom: str, args: list[str]) -> dict[str, object]:
             calls.append((atom, args))
             if atom.endswith("download_telegram_message_media.py"):
-                return {"file_path": "input_dir/-1002334435280/videos/8711.mp4"}
+                return {
+                    "file_path": str(
+                        Path("artifacts/run-1/downloads/-1002334435280/videos/8711.mp4")
+                    )
+                }
             if atom.endswith("detect_nude_segments.py"):
                 return {"segment_count": 1}
-            return {"output": "output_dir/8711_nude_scenes.mp4"}
+            return {"output": "artifacts/run-1/outputs/8711_nude_scenes.mp4"}
 
         with patch.object(workflow_atom, "run_atom", new=fake_run_atom):
             result = workflow_atom.run_workflow(
                 link="https://t.me/c/2334435280/8711",
-                download_root=Path("input_dir"),
-                output_dir=Path("output_dir"),
+                artifacts_root=Path("artifacts"),
+                run_dir=Path("artifacts/run-1"),
                 output=None,
                 sample_fps=2.0,
                 threshold=0.45,
@@ -422,9 +430,14 @@ class TelegramNudeScenesWorkflowTests(unittest.TestCase):
                 "atoms/render_video_segments.py",
             ],
         )
-        self.assertEqual(result["output_video"], "output_dir/8711_nude_scenes.mp4")
-        self.assertEqual(result["manifest_csv"], "output_dir/8711_nude_scenes.csv")
-        self.assertEqual(result["summary_json"], "output_dir/8711_nude_scenes.json")
+        self.assertEqual(result["artifacts_dir"], "artifacts/run-1")
+        self.assertEqual(result["output_video"], "artifacts/run-1/outputs/8711_nude_scenes.mp4")
+        self.assertEqual(result["manifest_csv"], "artifacts/run-1/outputs/8711_nude_scenes.csv")
+        self.assertEqual(result["summary_json"], "artifacts/run-1/outputs/8711_nude_scenes.json")
+        self.assertIn("artifacts/run-1/downloads", calls[0][1])
+        self.assertIn("artifacts/run-1/outputs/8711_nude_scenes.json", calls[1][1])
+        self.assertIn("artifacts/run-1/work", calls[1][1])
+        self.assertIn("artifacts/run-1/work", calls[2][1])
 
     def test_workflow_stops_on_first_failing_atom(self) -> None:
         calls: list[str] = []
@@ -437,8 +450,8 @@ class TelegramNudeScenesWorkflowTests(unittest.TestCase):
             with self.assertRaises(workflow_atom.AtomFailure) as caught:
                 workflow_atom.run_workflow(
                     link="https://t.me/c/2334435280/8711",
-                    download_root=Path("input_dir"),
-                    output_dir=Path("output_dir"),
+                    artifacts_root=Path("artifacts"),
+                    run_dir=Path("artifacts/run-1"),
                     output=None,
                     sample_fps=2.0,
                     threshold=0.45,

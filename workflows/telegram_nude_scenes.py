@@ -14,13 +14,15 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+from uuid import uuid4
 
 
-DEFAULT_DOWNLOAD_ROOT = Path("input_dir")
-DEFAULT_OUTPUT_DIR = Path("output_dir")
+DEFAULT_ARTIFACTS_ROOT = Path("artifacts")
 
 
 @dataclass(frozen=True)
@@ -34,29 +36,64 @@ class AtomFailure(RuntimeError):
         return f"{self.atom} failed with exit code {self.exit_code}: {detail}"
 
 
+def log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def create_run_dir(artifacts_root: Path) -> Path:
+    run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    run_dir = artifacts_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
 def run_atom(atom: str, args: list[str]) -> dict[str, object]:
     command = ["uv", "run", atom, *args, "--json"]
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise AtomFailure(atom=atom, exit_code=result.returncode, stderr=result.stderr)
+    log(f"[workflow] Starting {atom}")
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if process.stdout is None or process.stderr is None:
+        raise AtomFailure(atom=atom, exit_code=0, stderr="Could not capture atom output.")
+
+    stderr_chunks: list[str] = []
+
+    def relay_stderr() -> None:
+        for line in process.stderr:
+            stderr_chunks.append(line)
+            print(line, end="", file=sys.stderr, flush=True)
+
+    stderr_thread = threading.Thread(target=relay_stderr, daemon=True)
+    stderr_thread.start()
+    stdout = process.stdout.read()
+    return_code = process.wait()
+    stderr_thread.join()
+
+    stderr = "".join(stderr_chunks)
+    if return_code != 0:
+        raise AtomFailure(atom=atom, exit_code=return_code, stderr=stderr)
     try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise AtomFailure(
             atom=atom,
             exit_code=0,
-            stderr=f"Atom produced invalid JSON on stdout: {result.stdout!r}",
+            stderr=f"Atom produced invalid JSON on stdout: {stdout!r}",
         ) from exc
     if not isinstance(payload, dict):
         raise AtomFailure(atom=atom, exit_code=0, stderr="Atom JSON stdout was not an object.")
+    log(f"[workflow] Finished {atom}")
     return payload
 
 
 def run_workflow(
     *,
     link: str,
-    download_root: Path,
-    output_dir: Path,
+    artifacts_root: Path,
+    run_dir: Path | None,
     output: Path | None,
     sample_fps: float,
     threshold: float,
@@ -70,6 +107,12 @@ def run_workflow(
     crf: int,
     preset: str,
 ) -> dict[str, object]:
+    actual_run_dir = run_dir or create_run_dir(artifacts_root)
+    download_root = actual_run_dir / "downloads"
+    output_dir = actual_run_dir / "outputs"
+    work_dir_root = actual_run_dir / "work"
+    log(f"[workflow] Run artifacts: {actual_run_dir}")
+
     download_result = run_atom(
         "atoms/download_telegram_message_media.py",
         [
@@ -118,6 +161,8 @@ def run_workflow(
         str(max_width),
         "--classes",
         *classes,
+        "--work-dir-root",
+        str(work_dir_root),
     ]
     if keep_work_dir:
         detect_args.append("--keep-work-dir")
@@ -133,12 +178,15 @@ def run_workflow(
         str(crf),
         "--preset",
         preset,
+        "--work-dir-root",
+        str(work_dir_root),
     ]
     if keep_work_dir:
         render_args.append("--keep-work-dir")
     render_result = run_atom("atoms/render_video_segments.py", render_args)
 
     return {
+        "artifacts_dir": str(actual_run_dir),
         "downloaded_video": str(input_video),
         "output_video": str(output_video),
         "manifest_csv": str(manifest_csv),
@@ -160,18 +208,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("link", help="Telegram message link.")
     parser.add_argument(
-        "--download-root",
+        "--artifacts-root",
         type=Path,
-        default=DEFAULT_DOWNLOAD_ROOT,
-        help="Root directory for downloaded Telegram media (default: input_dir).",
+        default=DEFAULT_ARTIFACTS_ROOT,
+        help="Root directory for per-run workflow artifacts (default: artifacts).",
     )
     parser.add_argument(
-        "--output-dir",
+        "--run-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directory for rendered video and detection artifacts (default: output_dir).",
+        default=None,
+        help=(
+            "Specific run directory to use inside or outside artifacts-root. "
+            "Defaults to a new timestamped directory under artifacts-root."
+        ),
     )
-    parser.add_argument("-o", "--output", type=Path, default=None, help="Rendered output video path.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Rendered output video path. Defaults to the workflow run directory.",
+    )
     parser.add_argument("--sample-fps", type=float, default=2.0)
     parser.add_argument("--threshold", type=float, default=0.45)
     parser.add_argument("--exposed-threshold", type=float, default=0.3)
@@ -202,8 +259,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = run_workflow(
             link=args.link,
-            download_root=args.download_root.expanduser(),
-            output_dir=args.output_dir.expanduser(),
+            artifacts_root=args.artifacts_root.expanduser(),
+            run_dir=args.run_dir.expanduser() if args.run_dir else None,
             output=args.output.expanduser() if args.output else None,
             sample_fps=args.sample_fps,
             threshold=args.threshold,
@@ -227,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
+        print(result["artifacts_dir"])
         print(result["downloaded_video"])
         print(result["output_video"])
         print(result["manifest_csv"])

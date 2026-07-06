@@ -97,6 +97,7 @@ Workflows should handle:
 
 - Call order.
 - Default output paths.
+- Creating one per-run artifact directory.
 - Passing CLI arguments through to atoms.
 - Parsing atom JSON.
 - Stopping on first failed atom.
@@ -113,7 +114,7 @@ Prefer this shape:
 
 ```text
 atoms/do_one_thing.py INPUT --output OUTPUT --json
-workflows/do_many_things.py INPUT --output-dir output_dir --json
+workflows/do_many_things.py INPUT --artifacts-root artifacts --json
 ```
 
 Rules:
@@ -195,6 +196,35 @@ Use atomic or cleanup-aware patterns:
 If an atom writes a manifest or summary, it should write valid output even for
 empty results. Empty success is still success.
 
+Workflows should keep all generated material for a single run under one
+directory:
+
+```text
+artifacts/
+  20260706-153012-a1b2c3d4/
+    downloads/
+    outputs/
+    work/
+```
+
+Guidelines:
+
+- Gitignore the top-level `artifacts/` directory.
+- Create a fresh run directory for each workflow execution.
+- Put downloaded inputs, manifests, summaries, rendered outputs, and other
+  workflow-owned material under that run directory.
+- Pass paths inside the run directory to atoms explicitly.
+- If atoms create temporary work directories that may be preserved for
+  debugging, give them a `--work-dir-root` option and pass
+  `artifacts/<run-id>/work`.
+- Include the run directory in the workflow JSON as `artifacts_dir`.
+- Avoid shared default directories such as `input_dir/` and `output_dir/` for
+  new workflows because repeated runs collide and artifacts are harder to
+  inspect or delete safely.
+- If a workflow offers an escape hatch such as `--output`, document that it can
+  place the final result outside the run directory; internal intermediates
+  should still remain inside the run directory.
+
 ## Dependencies
 
 Atom dependency policy:
@@ -234,7 +264,7 @@ Workflow tests should mock the subprocess runner and verify:
 
 - Atom call order.
 - Arguments passed to each atom.
-- Default path derivation.
+- Fresh run directory and default path derivation under `artifacts/`.
 - First failing atom stops the workflow.
 - Error includes atom name, exit code, and stderr.
 
@@ -262,7 +292,7 @@ Before accepting a new workflow:
 - `uv run workflows/name.py --help` works.
 - Atoms invoked through subprocess, not imported.
 - Atom failures preserve atom path, exit code, stderr.
-- Default artifacts have deterministic paths.
+- Default artifacts are grouped under one gitignored per-run directory.
 - Workflow JSON includes key artifact paths and nested atom results when useful.
 - Tests verify call order and failure stop behavior.
 
@@ -304,7 +334,19 @@ output = Path("output.mp4")
 ```
 
 Problem: repeated runs collide and workflows cannot predict artifacts.
-Fix: derive paths from input stem or require explicit output flags.
+Fix: create `artifacts/<run-id>/`, derive paths inside it from input stem, or
+require explicit output flags for intentional exceptions.
+
+Workflow swallowing atom progress:
+
+```python
+subprocess.run(command, check=False, capture_output=True, text=True)
+```
+
+Problem: atom logs are captured but not shown, so long-running workflows look
+stalled.
+Fix: capture stdout for JSON parsing, but relay atom stderr to workflow stderr
+in real time. Workflow progress messages should also go to stderr.
 
 ## Minimal Atom Skeleton
 
@@ -370,9 +412,23 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+from uuid import uuid4
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def create_run_dir(artifacts_root: Path) -> Path:
+    run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+    run_dir = artifacts_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
 
 
 @dataclass(frozen=True)
@@ -387,15 +443,32 @@ class AtomFailure(RuntimeError):
 
 
 def run_atom(atom: str, args: list[str]) -> dict[str, object]:
-    result = subprocess.run(
+    process = subprocess.Popen(
         ["uv", "run", atom, *args, "--json"],
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
-    if result.returncode != 0:
-        raise AtomFailure(atom, result.returncode, result.stderr)
-    payload = json.loads(result.stdout)
+    if process.stdout is None or process.stderr is None:
+        raise AtomFailure(atom, 0, "Could not capture atom output.")
+
+    stderr_chunks: list[str] = []
+
+    def relay_stderr() -> None:
+        for line in process.stderr:
+            stderr_chunks.append(line)
+            print(line, end="", file=sys.stderr, flush=True)
+
+    stderr_thread = threading.Thread(target=relay_stderr, daemon=True)
+    stderr_thread.start()
+    stdout = process.stdout.read()
+    return_code = process.wait()
+    stderr_thread.join()
+
+    stderr = "".join(stderr_chunks)
+    if return_code != 0:
+        raise AtomFailure(atom, return_code, stderr)
+    payload = json.loads(stdout)
     if not isinstance(payload, dict):
         raise AtomFailure(atom, 0, "Atom JSON stdout was not an object.")
     return payload
@@ -404,20 +477,22 @@ def run_atom(atom: str, args: list[str]) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compose atoms into one task.")
     parser.add_argument("input")
+    parser.add_argument("--artifacts-root", type=Path, default=Path("artifacts"))
     args = parser.parse_args(argv)
 
     try:
-        first = run_atom("atoms/first.py", [args.input])
+        run_dir = create_run_dir(args.artifacts_root.expanduser())
+        log(f"[workflow] Run artifacts: {run_dir}")
+        first = run_atom("atoms/first.py", [args.input, "--output-dir", str(run_dir / "first")])
         second = run_atom("atoms/second.py", [str(first["output"])])
     except AtomFailure as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps({"first": first, "second": second}, ensure_ascii=False))
+    print(json.dumps({"artifacts_dir": str(run_dir), "first": first, "second": second}, ensure_ascii=False))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 ```
-

@@ -306,6 +306,7 @@ def detect_video_segments(
     max_width: int,
     classes: list[str],
     keep_work_dir: bool,
+    work_dir_root: Path | None,
 ) -> dict[str, object]:
     if sample_fps <= 0:
         raise ValueError("--sample-fps must be greater than 0")
@@ -324,7 +325,9 @@ def detect_video_segments(
     log(f"Duration: {duration:.1f}s")
     log(f"Sampling: {sample_fps:g} fps ({math.ceil(duration * sample_fps)} frames expected)")
 
-    temp_context = tempfile.TemporaryDirectory(prefix="nude_segment_detect_")
+    if work_dir_root is not None:
+        work_dir_root.mkdir(parents=True, exist_ok=True)
+    temp_context = tempfile.TemporaryDirectory(prefix="nude_segment_detect_", dir=work_dir_root)
     work_dir = Path(temp_context.name)
     try:
         frames = extract_sample_frames(input_path, work_dir / "frames", sample_fps, max_width)
@@ -403,6 +406,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-width", type=int, default=640)
     parser.add_argument("--classes", nargs="+", default=sorted(DEFAULT_CLASSES))
     parser.add_argument("--keep-work-dir", action="store_true")
+    parser.add_argument(
+        "--work-dir-root",
+        type=Path,
+        default=None,
+        help="Directory where temporary work directories are created.",
+    )
     parser.add_argument("--json", action="store_true", help="Write summary JSON to stdout.")
     return parser
 
@@ -425,6 +434,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_width=args.max_width,
             classes=args.classes,
             keep_work_dir=args.keep_work_dir,
+            work_dir_root=args.work_dir_root.expanduser() if args.work_dir_root else None,
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

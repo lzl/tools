@@ -27,6 +27,10 @@ class Segment:
         return max(0.0, self.end - self.start)
 
 
+def log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
 def run(cmd: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, check=False, capture_output=capture, text=True)
     if result.returncode != 0:
@@ -77,6 +81,10 @@ def render_segments(
     for index, segment in enumerate(segments):
         clip_path = clips_dir / f"clip_{index:04d}.mp4"
         clip_paths.append(clip_path)
+        log(
+            f"Rendering clip {index + 1}/{len(segments)}: "
+            f"{segment.start:.3f}s -> {segment.end:.3f}s"
+        )
         run(
             [
                 "ffmpeg",
@@ -116,6 +124,7 @@ def render_segments(
         for clip_path in clip_paths:
             f.write(f"file '{clip_path.resolve().as_posix()}'\n")
 
+    log(f"Concatenating {len(clip_paths)} rendered clips")
     run(
         [
             "ffmpeg",
@@ -139,6 +148,7 @@ def render_segments(
 
 
 def write_empty_video(output_path: Path) -> None:
+    log("No segments found; rendering placeholder video")
     run(
         [
             "ffmpeg",
@@ -172,6 +182,7 @@ def render_from_json(
     crf: int,
     preset: str,
     keep_work_dir: bool,
+    work_dir_root: Path | None,
 ) -> dict[str, object]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -180,8 +191,14 @@ def render_from_json(
     require_binary("ffmpeg")
     segments = load_segments(segments_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    log(f"Input: {input_path}")
+    log(f"Segments JSON: {segments_json}")
+    log(f"Output: {output_path}")
+    log(f"Segments: {len(segments)}")
 
-    temp_context = tempfile.TemporaryDirectory(prefix="nude_segment_render_")
+    if work_dir_root is not None:
+        work_dir_root.mkdir(parents=True, exist_ok=True)
+    temp_context = tempfile.TemporaryDirectory(prefix="nude_segment_render_", dir=work_dir_root)
     work_dir = Path(temp_context.name)
     placeholder = not segments
     try:
@@ -199,7 +216,7 @@ def render_from_json(
         }
     finally:
         if keep_work_dir:
-            print(f"Kept work dir: {work_dir}", file=sys.stderr)
+            log(f"Kept work dir: {work_dir}")
         else:
             temp_context.cleanup()
 
@@ -214,6 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crf", type=int, default=20)
     parser.add_argument("--preset", default="veryfast")
     parser.add_argument("--keep-work-dir", action="store_true")
+    parser.add_argument(
+        "--work-dir-root",
+        type=Path,
+        default=None,
+        help="Directory where temporary work directories are created.",
+    )
     parser.add_argument("--json", action="store_true", help="Write a single JSON object to stdout.")
     return parser
 
@@ -229,6 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             crf=args.crf,
             preset=args.preset,
             keep_work_dir=args.keep_work_dir,
+            work_dir_root=args.work_dir_root.expanduser() if args.work_dir_root else None,
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
