@@ -121,6 +121,38 @@ class DownloadTelegramMessageAtomTests(unittest.TestCase):
             )
             self.assertNotIn("{", stderr)
 
+    def test_download_progress_is_throttled_by_percent_step(self) -> None:
+        stream = io.StringIO()
+        reporter = download_atom.ConsoleProgressReporter(stream=stream, percent_step=5)
+        message = download_atom.ChannelMessage(
+            channel_id="example_channel",
+            message_id=42,
+            media_type="video",
+            file_id="video-42",
+            extension=".mp4",
+            source=None,
+        )
+
+        reporter.on_download_started(message=message, final_path=Path("out.mp4"))
+        for received_bytes in (1, 2, 4, 5, 6, 9, 10, 99, 100):
+            reporter.on_download_progress(
+                message=message,
+                received_bytes=received_bytes,
+                total_bytes=100,
+            )
+
+        lines = stream.getvalue().splitlines()
+        self.assertEqual(
+            lines,
+            [
+                "Downloading video from message 42 -> out.mp4",
+                "Message 42: 5% (5 B / 100 B)",
+                "Message 42: 10% (10 B / 100 B)",
+                "Message 42: 95% (99 B / 100 B)",
+                "Message 42: 100% (100 B / 100 B)",
+            ],
+        )
+
     def test_public_link_uses_username_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             message = download_atom.ChannelMessage(

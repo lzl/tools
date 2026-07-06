@@ -350,10 +350,13 @@ class ChannelStore:
 
 
 class ConsoleProgressReporter:
-    def __init__(self, stream: Any = None) -> None:
+    def __init__(self, stream: Any = None, *, percent_step: int = 5) -> None:
         self.stream = stream if stream is not None else sys.stderr
+        self.percent_step = percent_step
+        self._last_reported_percent: dict[int, int] = {}
 
     def on_download_started(self, *, message: ChannelMessage, final_path: Path) -> None:
+        self._last_reported_percent.pop(message.message_id, None)
         print(
             f"Downloading {message.media_type or 'media'} from message {message.message_id} -> {final_path}",
             file=self.stream,
@@ -367,17 +370,36 @@ class ConsoleProgressReporter:
         received_bytes: int,
         total_bytes: int | None,
     ) -> None:
-        if total_bytes:
-            print(
-                f"Message {message.message_id}: {received_bytes} / {total_bytes} bytes",
-                file=self.stream,
-                flush=True,
-            )
+        if not total_bytes:
+            return
+
+        percent = min(100, int(received_bytes * 100 / total_bytes))
+        reported_percent = percent - (percent % self.percent_step)
+        if received_bytes >= total_bytes:
+            reported_percent = 100
+        if reported_percent == 0:
+            return
+
+        last_reported = self._last_reported_percent.get(message.message_id, -1)
+        if reported_percent <= last_reported:
+            return
+
+        self._last_reported_percent[message.message_id] = reported_percent
+        print(
+            (
+                f"Message {message.message_id}: {reported_percent}% "
+                f"({format_bytes(received_bytes)} / {format_bytes(total_bytes)})"
+            ),
+            file=self.stream,
+            flush=True,
+        )
 
     def on_download_completed(self, *, message: ChannelMessage, final_path: Path) -> None:
+        self._last_reported_percent.pop(message.message_id, None)
         print(f"Saved message {message.message_id} to {final_path}", file=self.stream, flush=True)
 
     def on_existing_file_skipped(self, *, message: ChannelMessage, final_path: Path) -> None:
+        self._last_reported_percent.pop(message.message_id, None)
         print(
             f"Skipping message {message.message_id}; already downloaded at {final_path}",
             file=self.stream,
@@ -385,11 +407,22 @@ class ConsoleProgressReporter:
         )
 
     def on_manifest_backfilled(self, *, message: ChannelMessage, final_path: Path) -> None:
+        self._last_reported_percent.pop(message.message_id, None)
         print(
             f"Backfilled manifest for message {message.message_id} from existing file {final_path}",
             file=self.stream,
             flush=True,
         )
+
+
+def format_bytes(value: int) -> str:
+    size = float(value)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
 
 
 class DownloadMessageRunner:
