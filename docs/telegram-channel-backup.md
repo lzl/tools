@@ -1,6 +1,7 @@
 # Telegram Channel Backup
 
-Backup one Telegram channel. Export only messages first saved by current run.
+Backup one Telegram channel. Export messages added or voice-transcript-updated by
+current run.
 
 ## Need
 
@@ -54,9 +55,34 @@ artifacts/<timestamp>-<id>/
   outputs/new_messages.md
 ```
 
-`new_messages.md` contains only rows newly inserted during current run. First
-run treats full history as new local backup. Later no-new run writes valid
+`new_messages.md` contains rows newly inserted during current run. It also
+contains old voice rows when this run adds Telegram transcript text. First run
+treats full history as new local backup. Later no-change run writes valid
 Markdown with `No new messages.`.
+
+## Voice Text
+
+New voice messages call Telegram built-in transcription during backup. Caption
+stays caption. Transcript saves in separate SQLite field and exports below
+`#### Transcript`.
+
+Old DB rows need one-time backfill. Start small. Check output. Repeat batches.
+
+```bash
+uv run workflows/backup_telegram_channel_markdown.py -1001445373305 \
+  --backfill-voice-transcripts \
+  --voice-transcript-limit 100
+```
+
+Remove limit to try every saved voice missing transcript.
+
+```bash
+uv run workflows/backup_telegram_channel_markdown.py -1001445373305 \
+  --backfill-voice-transcripts
+```
+
+Telegram decides transcript availability. Account may need Premium. Failed,
+pending, unavailable voice stays saved; retry later with same command.
 
 Choose paths:
 
@@ -90,7 +116,8 @@ uv run atoms/export_telegram_messages_markdown.py \
 ```
 
 `--full` makes backup atom scan whole channel. Existing DB rows stay unchanged.
-Export still includes only rows newly inserted by that run.
+`--backfill-voice-transcripts` may update old voice rows. Their IDs go into
+`new_message_ids.json` so export can show new transcript text.
 
 ## Problems
 

@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from atoms import backup_telegram_channel as backup_atom
 from atoms import export_telegram_messages_markdown as export_atom
@@ -23,12 +24,12 @@ class BackupTelegramChannelAtomTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             connection = backup_atom.create_database(Path(temp_dir) / "backup.sqlite3")
             connection.execute(
-                "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("one", 50, "2026-01-01T00:00:00+00:00", None, None, None, 0, None),
+                "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("one", 50, "2026-01-01T00:00:00+00:00", None, None, None, 0, None, None),
             )
             connection.execute(
-                "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("two", 80, "2026-01-01T00:00:00+00:00", None, None, None, 0, None),
+                "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("two", 80, "2026-01-01T00:00:00+00:00", None, None, None, 0, None, None),
             )
             connection.commit()
             self.assertEqual(backup_atom.get_last_message_id(connection, "one"), 50)
@@ -57,7 +58,41 @@ class BackupTelegramChannelAtomTests(unittest.TestCase):
         record = backup_atom.message_record("one", message)
 
         self.assertEqual(record[0:4], ("one", 7, "2026-01-02T03:04:05+00:00", "saved text"))
-        self.assertEqual(record[6:], (1, "photo"))
+        self.assertEqual(record[6:], (1, "photo", None))
+
+    def test_create_database_migrates_existing_message_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "old.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                CREATE TABLE telegram_messages (
+                    channel_id TEXT NOT NULL, message_id INTEGER NOT NULL, posted_at TEXT NOT NULL,
+                    text_content TEXT, sender_id TEXT, grouped_id TEXT, has_media INTEGER NOT NULL,
+                    media_type TEXT, PRIMARY KEY (channel_id, message_id)
+                )
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = backup_atom.create_database(database)
+            columns = {
+                str(row[1]) for row in migrated.execute("PRAGMA table_info(telegram_messages)")
+            }
+            migrated.close()
+
+        self.assertIn("transcription_text", columns)
+
+    def test_transcribe_voice_message_returns_telegram_text(self) -> None:
+        client = AsyncMock()
+        client.return_value = SimpleNamespace(pending=False, text=" Telegram words ")
+        message = SimpleNamespace(peer_id="peer", id=42)
+
+        transcript = __import__("asyncio").run(backup_atom.transcribe_voice_message(client, message))
+
+        self.assertEqual(transcript, "Telegram words")
+        client.assert_awaited_once()
 
 
 class ExportTelegramMessagesAtomTests(unittest.TestCase):
@@ -72,12 +107,12 @@ class ExportTelegramMessagesAtomTests(unittest.TestCase):
             ("two", "Second channel", None),
         )
         connection.execute(
-            "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("one", 7, "2026-01-02T00:00:00+00:00", "first text", None, None, 0, None),
+            "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("one", 7, "2026-01-02T00:00:00+00:00", "first text", None, None, 0, None, None),
         )
         connection.execute(
-            "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("two", 7, "2026-01-03T00:00:00+00:00", "wrong channel", None, None, 0, None),
+            "INSERT INTO telegram_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("two", 7, "2026-01-03T00:00:00+00:00", "wrong channel", None, None, 0, None, None),
         )
         connection.commit()
         connection.close()
@@ -103,6 +138,38 @@ class ExportTelegramMessagesAtomTests(unittest.TestCase):
             self.assertIn("first text", markdown)
             self.assertNotIn("wrong channel", markdown)
             self.assertIn("https://t.me/first/7", markdown)
+
+    def test_export_renders_voice_caption_and_transcript_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "backup.sqlite3"
+            message_ids = root / "ids.json"
+            output = root / "new.md"
+            self.make_database(database)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                UPDATE telegram_messages
+                SET has_media = 1, media_type = 'voice', text_content = ?, transcription_text = ?
+                WHERE channel_id = 'one' AND message_id = 7
+                """,
+                ("Short caption", "Full Telegram transcript."),
+            )
+            connection.commit()
+            connection.close()
+            message_ids.write_text("[7]", encoding="utf-8")
+
+            export_atom.export_messages(
+                database_path=database,
+                channel_id="one",
+                message_ids_path=message_ids,
+                output_path=output,
+            )
+
+            markdown = output.read_text(encoding="utf-8")
+            self.assertIn("Short caption", markdown)
+            self.assertIn("#### Transcript", markdown)
+            self.assertIn("Full Telegram transcript.", markdown)
 
     def test_export_writes_valid_empty_incremental_document(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -145,6 +212,8 @@ class BackupWorkflowTests(unittest.TestCase):
                 run_dir=root / "run",
                 output=None,
                 full=False,
+                backfill_voice_transcripts_requested=False,
+                voice_transcript_limit=None,
             )
 
         self.assertEqual([call[0] for call in calls], [
@@ -154,6 +223,35 @@ class BackupWorkflowTests(unittest.TestCase):
         self.assertIn("--channel-id", calls[1][1])
         self.assertIn("123", calls[1][1])
         self.assertTrue(result["markdown_output"].endswith("run/outputs/new_messages.md"))
+
+    def test_workflow_forwards_voice_backfill_flags(self) -> None:
+        calls: list[tuple[str, list[str]]] = []
+
+        def fake_run_atom(atom: str, args: list[str]) -> dict[str, object]:
+            calls.append((atom, args))
+            return {"channel_id": "123"} if "backup" in atom else {}
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            workflow, "run_atom", new=fake_run_atom
+        ):
+            root = Path(temp_dir)
+            workflow.run_workflow(
+                channel="-100123",
+                database=root / "state.sqlite3",
+                artifacts_root=root / "artifacts",
+                run_dir=root / "run",
+                output=None,
+                full=False,
+                backfill_voice_transcripts_requested=True,
+                voice_transcript_limit=2,
+            )
+
+        backup_args = calls[0][1]
+        self.assertIn("--backfill-voice-transcripts", backup_args)
+        self.assertEqual(
+            backup_args[backup_args.index("--voice-transcript-limit") + 1],
+            "2",
+        )
 
     def test_workflow_relays_atom_stderr_without_contaminating_stdout(self) -> None:
         class FakeProcess:

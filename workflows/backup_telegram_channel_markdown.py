@@ -79,7 +79,15 @@ def run_atom(atom: str, args: list[str]) -> dict[str, object]:
 
 
 def run_workflow(
-    *, channel: str, database: Path, artifacts_root: Path, run_dir: Path | None, output: Path | None, full: bool
+    *,
+    channel: str,
+    database: Path,
+    artifacts_root: Path,
+    run_dir: Path | None,
+    output: Path | None,
+    full: bool,
+    backfill_voice_transcripts_requested: bool,
+    voice_transcript_limit: int | None,
 ) -> dict[str, object]:
     actual_run_dir = run_dir or create_run_dir(artifacts_root)
     outputs_dir = actual_run_dir / "outputs"
@@ -95,6 +103,10 @@ def run_workflow(
     ]
     if full:
         backup_args.append("--full")
+    if backfill_voice_transcripts_requested:
+        backup_args.append("--backfill-voice-transcripts")
+    if voice_transcript_limit is not None:
+        backup_args.extend(["--voice-transcript-limit", str(voice_transcript_limit)])
     backup = run_atom("atoms/backup_telegram_channel.py", backup_args)
     channel_id = backup.get("channel_id")
     if not isinstance(channel_id, str) or not channel_id:
@@ -132,12 +144,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-dir", type=Path, default=None)
     parser.add_argument("-o", "--output", type=Path, default=None)
     parser.add_argument("--full", action="store_true", help="Scan full channel; export only rows new to database.")
+    parser.add_argument(
+        "--backfill-voice-transcripts",
+        action="store_true",
+        help="Fetch Telegram transcripts for saved voice messages missing them, then export those updated rows.",
+    )
+    parser.add_argument(
+        "--voice-transcript-limit",
+        type=int,
+        default=None,
+        help="Maximum saved voice messages to backfill; requires --backfill-voice-transcripts.",
+    )
     parser.add_argument("--json", action="store_true", help="Write workflow JSON to stdout.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.voice_transcript_limit is not None and args.voice_transcript_limit <= 0:
+        log("Error: --voice-transcript-limit must be greater than 0")
+        return 1
+    if args.voice_transcript_limit is not None and not args.backfill_voice_transcripts:
+        log("Error: --voice-transcript-limit requires --backfill-voice-transcripts")
+        return 1
     try:
         result = run_workflow(
             channel=args.channel,
@@ -146,6 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_dir=args.run_dir.expanduser() if args.run_dir else None,
             output=args.output.expanduser() if args.output else None,
             full=args.full,
+            backfill_voice_transcripts_requested=args.backfill_voice_transcripts,
+            voice_transcript_limit=args.voice_transcript_limit,
         )
     except AtomFailure as exc:
         log(f"Error: {exc}")

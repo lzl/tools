@@ -55,7 +55,10 @@ def render_markdown(
             details.append(f"album: {row['grouped_id']}")
         if details:
             lines.append("; ".join(details))
-        lines.extend(["", row["text_content"] or "[No text content.]", ""])
+        lines.extend(["", row["text_content"] or "[No text content.]"])
+        if row["transcription_text"]:
+            lines.extend(["", "#### Transcript", "", row["transcription_text"]])
+        lines.append("")
     return "\n".join(lines)
 
 

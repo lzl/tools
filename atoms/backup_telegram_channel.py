@@ -21,6 +21,12 @@ from typing import Any, Sequence
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.messages import TranscribeAudioRequest
+
+
+TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS = 15
+TRANSCRIPTION_POLL_ATTEMPTS = 10
+TRANSCRIPTION_MAX_ATTEMPTS = 2
 
 
 SCHEMA = """
@@ -39,6 +45,7 @@ CREATE TABLE IF NOT EXISTS telegram_messages (
     grouped_id TEXT,
     has_media INTEGER NOT NULL,
     media_type TEXT,
+    transcription_text TEXT,
     PRIMARY KEY (channel_id, message_id),
     FOREIGN KEY (channel_id) REFERENCES telegram_channels(channel_id)
 );
@@ -114,6 +121,13 @@ def create_database(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.executescript(SCHEMA)
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(telegram_messages)")
+    }
+    if "transcription_text" not in columns:
+        connection.execute("ALTER TABLE telegram_messages ADD COLUMN transcription_text TEXT")
+        connection.commit()
     return connection
 
 
@@ -141,7 +155,9 @@ def media_type(message: Any) -> str | None:
     return "media"
 
 
-def message_record(channel_id: str, message: Any) -> tuple[object, ...]:
+def message_record(
+    channel_id: str, message: Any, transcription_text: str | None = None
+) -> tuple[object, ...]:
     date = getattr(message, "date", None)
     if date is None:
         raise ValueError(f"Message {message.id} has no date")
@@ -157,11 +173,95 @@ def message_record(channel_id: str, message: Any) -> tuple[object, ...]:
         str(getattr(message, "grouped_id", "") or "") or None,
         int(bool(getattr(message, "media", None))),
         media_type(message),
+        transcription_text,
     )
 
 
+async def transcribe_voice_message(client: TelegramClient, message: Any) -> str | None:
+    """Ask Telegram for its built-in voice-message transcript."""
+    request = TranscribeAudioRequest(peer=message.peer_id, msg_id=int(message.id))
+    for attempt in range(1, TRANSCRIPTION_MAX_ATTEMPTS + 1):
+        try:
+            result = await asyncio.wait_for(
+                client(request), timeout=TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS
+            )
+            for _ in range(TRANSCRIPTION_POLL_ATTEMPTS):
+                if not getattr(result, "pending", False):
+                    text = getattr(result, "text", None)
+                    return str(text).strip() if text and str(text).strip() else None
+                await asyncio.sleep(1)
+                result = await asyncio.wait_for(
+                    client(request), timeout=TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS
+                )
+            log(f"[backup] Voice {message.id}: transcription still pending")
+            return None
+        except Exception as exc:
+            if attempt < TRANSCRIPTION_MAX_ATTEMPTS:
+                log(f"[backup] Voice {message.id}: transcription attempt {attempt} failed; retrying")
+                await asyncio.sleep(attempt)
+                continue
+            log(f"[backup] Voice {message.id}: transcription unavailable: {exc}")
+    return None
+
+
+async def backfill_voice_transcripts(
+    *,
+    client: TelegramClient,
+    entity: Any,
+    connection: sqlite3.Connection,
+    channel_id: str,
+    limit: int | None,
+) -> list[int]:
+    rows = connection.execute(
+        """
+        SELECT message_id
+        FROM telegram_messages
+        WHERE channel_id = ? AND media_type = 'voice'
+          AND (transcription_text IS NULL OR trim(transcription_text) = '')
+        ORDER BY message_id ASC
+        """,
+        (channel_id,),
+    ).fetchall()
+    missing_ids = [int(row[0]) for row in rows]
+    if limit is not None:
+        missing_ids = missing_ids[:limit]
+    if not missing_ids:
+        return []
+
+    log(f"[backup] Backfilling Telegram transcripts for {len(missing_ids)} voice messages")
+    updated_ids: list[int] = []
+    for index, message_id in enumerate(missing_ids, start=1):
+        message = await client.get_messages(entity, ids=message_id)
+        if message is None or media_type(message) != "voice":
+            log(f"[backup] Voice {message_id}: message unavailable")
+            continue
+        transcript = await transcribe_voice_message(client, message)
+        if transcript is not None:
+            connection.execute(
+                """
+                UPDATE telegram_messages
+                SET transcription_text = ?
+                WHERE channel_id = ? AND message_id = ?
+                """,
+                (transcript, channel_id, message_id),
+            )
+            updated_ids.append(message_id)
+        if index % 10 == 0:
+            connection.commit()
+            log(f"[backup] Voice transcripts: checked {index}; added {len(updated_ids)}")
+    connection.commit()
+    log(f"[backup] Voice transcripts done. Added {len(updated_ids)}")
+    return updated_ids
+
+
 async def backup_channel(
-    *, channel_input: str, database_path: Path, new_messages_path: Path, full: bool
+    *,
+    channel_input: str,
+    database_path: Path,
+    new_messages_path: Path,
+    full: bool,
+    backfill_voice_transcripts_requested: bool,
+    voice_transcript_limit: int | None,
 ) -> dict[str, object]:
     api_id, api_hash, session = require_credentials()
     requested_channel = normalize_channel_id(channel_input)
@@ -186,21 +286,47 @@ async def backup_channel(
         new_message_ids: list[int] = []
         scanned = 0
         inserted = 0
+        transcribed_new_count = 0
         insert_sql = """
             INSERT OR IGNORE INTO telegram_messages
-            (channel_id, message_id, posted_at, text_content, sender_id, grouped_id, has_media, media_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (channel_id, message_id, posted_at, text_content, sender_id, grouped_id, has_media, media_type, transcription_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         # Oldest first makes MAX(message_id) a valid resumable checkpoint after Ctrl+C.
         async for message in client.iter_messages(entity, min_id=last_message_id, reverse=True):
             scanned += 1
-            cursor = connection.execute(insert_sql, message_record(channel_id, message))
+            cursor = connection.execute(
+                insert_sql, message_record(channel_id, message)
+            )
             if cursor.rowcount:
                 inserted += 1
                 new_message_ids.append(int(message.id))
+                if media_type(message) == "voice":
+                    transcript = await transcribe_voice_message(client, message)
+                    if transcript is not None:
+                        connection.execute(
+                            """
+                            UPDATE telegram_messages
+                            SET transcription_text = ?
+                            WHERE channel_id = ? AND message_id = ?
+                            """,
+                            (transcript, channel_id, int(message.id)),
+                        )
+                        transcribed_new_count += 1
             if scanned % 100 == 0:
                 connection.commit()
                 log(f"[backup] Scanned {scanned}; added {inserted}")
+
+        backfilled_ids: list[int] = []
+        if backfill_voice_transcripts_requested:
+            backfilled_ids = await backfill_voice_transcripts(
+                client=client,
+                entity=entity,
+                connection=connection,
+                channel_id=channel_id,
+                limit=voice_transcript_limit,
+            )
+            new_message_ids.extend(backfilled_ids)
 
         connection.execute(
             """
@@ -215,8 +341,12 @@ async def backup_channel(
         )
         connection.commit()
         new_messages_path.parent.mkdir(parents=True, exist_ok=True)
-        new_messages_path.write_text(json.dumps(new_message_ids), encoding="utf-8")
-        log(f"[backup] Done. Scanned {scanned}; added {inserted}")
+        selected_message_ids = sorted(set(new_message_ids))
+        new_messages_path.write_text(json.dumps(selected_message_ids), encoding="utf-8")
+        log(
+            f"[backup] Done. Scanned {scanned}; added {inserted}; "
+            f"new voice transcripts {transcribed_new_count}; backfilled {len(backfilled_ids)}"
+        )
         return {
             "status": "backed_up",
             "database": str(database_path),
@@ -227,6 +357,8 @@ async def backup_channel(
             "last_message_id_before": last_message_id,
             "scanned_count": scanned,
             "new_message_count": inserted,
+            "new_voice_transcript_count": transcribed_new_count,
+            "backfilled_voice_transcript_count": len(backfilled_ids),
             "new_messages_json": str(new_messages_path),
         }
     finally:
@@ -242,6 +374,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--new-messages-json", type=Path, required=True, help="Write IDs first stored by this run here."
     )
     parser.add_argument("--full", action="store_true", help="Fetch all messages; existing rows stay unchanged.")
+    parser.add_argument(
+        "--backfill-voice-transcripts",
+        action="store_true",
+        help="Fetch Telegram transcripts for saved voice messages missing them; include updated rows in export.",
+    )
+    parser.add_argument(
+        "--voice-transcript-limit",
+        type=int,
+        default=None,
+        help="Maximum saved voice messages to backfill. Use with --backfill-voice-transcripts.",
+    )
     parser.add_argument("--json", action="store_true", help="Write result JSON to stdout.")
     return parser
 
@@ -249,6 +392,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_dotenv_if_present()
+    if args.voice_transcript_limit is not None and args.voice_transcript_limit <= 0:
+        log("Error: --voice-transcript-limit must be greater than 0")
+        return 1
+    if args.voice_transcript_limit is not None and not args.backfill_voice_transcripts:
+        log("Error: --voice-transcript-limit requires --backfill-voice-transcripts")
+        return 1
     try:
         result = asyncio.run(
             backup_channel(
@@ -256,6 +405,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 database_path=args.database.expanduser(),
                 new_messages_path=args.new_messages_json.expanduser(),
                 full=args.full,
+                backfill_voice_transcripts_requested=args.backfill_voice_transcripts,
+                voice_transcript_limit=args.voice_transcript_limit,
             )
         )
     except KeyboardInterrupt:
