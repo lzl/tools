@@ -25,8 +25,14 @@ from yt_dlp_wrapper import resolve_yt_dlp, yt_dlp_command
 T = TypeVar('T')
 
 
+# Groq accepts files up to 25 MB. Use a lower target for generated segments
+# because bitrate can vary and stream-copy splits may land on nearby keyframes.
+GROQ_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+SEGMENT_TARGET_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
 # Segment duration threshold: 25 minutes in seconds
 SEGMENT_SECONDS = 25 * 60
+MAX_SPLIT_ATTEMPTS = 5
 
 # Maximum parallel transcription workers
 MAX_TRANSCRIBE_WORKERS = 4
@@ -300,6 +306,31 @@ def get_audio_duration(audio_path: Path) -> Optional[float]:
         return None
 
 
+def media_requires_splitting(duration: Optional[float], file_size_bytes: int) -> bool:
+    """Return whether media exceeds either Groq transcription limit."""
+    return (
+        (duration is not None and duration > SEGMENT_SECONDS)
+        or file_size_bytes > GROQ_MAX_FILE_SIZE_BYTES
+    )
+
+
+def calculate_segment_seconds(duration: Optional[float], file_size_bytes: int) -> int:
+    """Choose a segment duration that respects both duration and size limits."""
+    segment_seconds = SEGMENT_SECONDS
+
+    if (
+        duration is not None
+        and duration > 0
+        and file_size_bytes > GROQ_MAX_FILE_SIZE_BYTES
+    ):
+        size_based_seconds = int(
+            duration * SEGMENT_TARGET_FILE_SIZE_BYTES / file_size_bytes
+        )
+        segment_seconds = min(segment_seconds, max(1, size_based_seconds))
+
+    return segment_seconds
+
+
 def download_audio(
     video_url: str,
     temp_dir: Path,
@@ -358,13 +389,18 @@ def download_audio(
         raise RuntimeError(f"Failed to download audio (exit code {e.returncode})")
 
 
-def split_audio(audio_path: Path, segments_dir: Path) -> list[Path]:
+def split_audio(
+    audio_path: Path,
+    segments_dir: Path,
+    segment_seconds: int = SEGMENT_SECONDS,
+) -> list[Path]:
     """
     Split audio file into segments using split_media.py tool.
     
     Args:
         audio_path: Path to the audio file to split
         segments_dir: Directory to save the segments
+        segment_seconds: Initial duration of each segment in seconds
     
     Returns:
         List of paths to the generated segment files, sorted by index
@@ -378,36 +414,74 @@ def split_audio(audio_path: Path, segments_dir: Path) -> list[Path]:
     if not split_media_script.exists():
         raise FileNotFoundError(f"split_media.py not found at {split_media_script}")
     
-    cmd = [
-        "uv", "run", str(split_media_script),
-        str(audio_path),
-        str(SEGMENT_SECONDS),
-        str(segments_dir)
-    ]
-    
-    try:
-        subprocess.run(cmd, check=True, capture_output=False)
-        
-        # Find and sort generated segment files
+    current_segment_seconds = max(1, segment_seconds)
+
+    for attempt in range(1, MAX_SPLIT_ATTEMPTS + 1):
+        attempt_dir = segments_dir / f"attempt_{attempt}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "uv", "run", str(split_media_script),
+            str(audio_path),
+            str(current_segment_seconds),
+            str(attempt_dir),
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=False)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to split audio (exit code {e.returncode})")
+
         stem = audio_path.stem
         suffix = audio_path.suffix
-        segment_files: list[Path] = []
-        
-        for f in segments_dir.iterdir():
-            if f.is_file() and f.stem.startswith(f"{stem}_part_") and f.suffix == suffix:
-                segment_files.append(f)
-        
-        # Sort by the numeric index in the filename
+        segment_files = [
+            f
+            for f in attempt_dir.iterdir()
+            if (
+                f.is_file()
+                and f.stem.startswith(f"{stem}_part_")
+                and f.suffix == suffix
+            )
+        ]
         segment_files.sort(key=lambda p: int(p.stem.split("_part_")[-1]))
-        
+
         if not segment_files:
             raise RuntimeError("No segment files were created")
-        
-        print(f"✓ Created {len(segment_files)} segment(s)")
-        return segment_files
-        
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to split audio (exit code {e.returncode})")
+
+        oversized_segments = [
+            segment
+            for segment in segment_files
+            if segment.stat().st_size > GROQ_MAX_FILE_SIZE_BYTES
+        ]
+        if not oversized_segments:
+            print(f"✓ Created {len(segment_files)} segment(s)")
+            return segment_files
+
+        largest_size = max(segment.stat().st_size for segment in oversized_segments)
+        largest_size_mb = largest_size / (1024 * 1024)
+        if attempt == MAX_SPLIT_ATTEMPTS or current_segment_seconds == 1:
+            raise RuntimeError(
+                "Could not create segments within Groq's 25 MB limit; "
+                f"largest segment is {largest_size_mb:.2f} MB"
+            )
+
+        next_segment_seconds = max(
+            1,
+            int(
+                current_segment_seconds
+                * SEGMENT_TARGET_FILE_SIZE_BYTES
+                / largest_size
+            ),
+        )
+        if next_segment_seconds >= current_segment_seconds:
+            next_segment_seconds = max(1, current_segment_seconds - 1)
+
+        print(
+            f"Segment is still {largest_size_mb:.2f} MB; "
+            f"retrying with {next_segment_seconds}s segments"
+        )
+        current_segment_seconds = next_segment_seconds
+
+    raise RuntimeError("Could not create segments within Groq's 25 MB limit")
 
 
 def transcribe_single_segment(
@@ -716,21 +790,35 @@ def main() -> None:
             step_name="Downloading audio"
         )
         
-        # Step 3: Check duration and decide whether to split
+        # Step 3: Check duration and file size, then decide whether to split
         duration = get_audio_duration(audio_file)
-        
+        file_size_bytes = audio_file.stat().st_size
+        file_size_mb = file_size_bytes / (1024 * 1024)
+
+        print(f"\n=== Step 3: Checking media limits ===")
         if duration is not None:
             duration_minutes = duration / 60
-            print(f"\n=== Step 3: Checking audio duration ===")
             print(f"Audio duration: {duration_minutes:.1f} minutes ({duration:.0f} seconds)")
+        else:
+            print("Audio duration: unknown")
+        print(f"File size: {file_size_mb:.2f} MB")
         
         # Determine output filename (use original audio stem)
         output_vtt_name = f"{audio_file.stem}.vtt"
         final_vtt_path = output_dir / output_vtt_name
         
-        if duration is not None and duration > SEGMENT_SECONDS:
-            # Audio is longer than 25 minutes, split and transcribe in parallel
-            print(f"Audio exceeds {SEGMENT_SECONDS // 60} minutes, will split and transcribe in parallel")
+        if media_requires_splitting(duration, file_size_bytes):
+            exceeded_limits: list[str] = []
+            if duration is not None and duration > SEGMENT_SECONDS:
+                exceeded_limits.append(f"{SEGMENT_SECONDS // 60}-minute duration limit")
+            if file_size_bytes > GROQ_MAX_FILE_SIZE_BYTES:
+                exceeded_limits.append("25 MB Groq file-size limit")
+
+            segment_seconds = calculate_segment_seconds(duration, file_size_bytes)
+            print(
+                f"Media exceeds {' and '.join(exceeded_limits)}; "
+                f"using up to {segment_seconds}s per segment"
+            )
             
             # Create segments directory
             segments_dir = temp_dir / "segments"
@@ -745,6 +833,7 @@ def main() -> None:
                 split_audio,
                 audio_file,
                 segments_dir,
+                segment_seconds,
                 max_retries=2,
                 delay=5,
                 step_name="Splitting audio"
@@ -760,8 +849,8 @@ def main() -> None:
                 if seg_duration is not None:
                     segment_durations.append(seg_duration)
                 else:
-                    # Fallback to expected segment duration
-                    segment_durations.append(float(SEGMENT_SECONDS))
+                    # Fallback to the requested segment duration
+                    segment_durations.append(float(segment_seconds))
             
             # Merge VTT files with timestamp correction
             print(f"\n=== Step 5: Merging {len(vtt_files)} VTT file(s) ===")
@@ -773,11 +862,7 @@ def main() -> None:
             print(f"✓ Video URL added to subtitle file")
             
         else:
-            # Audio is 25 minutes or less, transcribe directly
-            if duration is not None:
-                print(f"Audio is under {SEGMENT_SECONDS // 60} minutes, transcribing directly")
-            else:
-                print("Could not determine duration, transcribing directly")
+            print("Media is within Groq's duration and file-size limits, transcribing directly")
             
             # Step 4: Transcribe audio to VTT
             vtt_file = retry_step(
