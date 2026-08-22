@@ -2,6 +2,28 @@
 
 A collection of utility tools. Each Python file is an independent tool that can be called separately via `uv`.
 
+## ZSXQ backup
+
+Back up all API-visible content, including complete long-form articles, from one ZSXQ group that the
+current account is already subscribed to. See
+[`docs/zsxq-backup.md`](docs/zsxq-backup.md) for the
+authorized token setup, API pagination method, output layout, and caveats.
+
+```bash
+uv run workflows/backup_zsxq.py GROUP_ID
+```
+
+Each run generates its own viewer beside the backed-up JSON, Markdown, and
+media. Start a local static server from the repository root:
+
+```bash
+python3 -m http.server 8765
+```
+
+Then open `http://localhost:8765/artifacts/RUN_ID/zsxq_viewer.html`,
+replacing `RUN_ID` with the directory printed by the workflow. The complete
+run directory can also be moved or archived as one self-contained unit.
+
 ## Usage
 
 Run tools directly using `uv run` with the Python file:

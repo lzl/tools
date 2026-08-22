@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f2ede5">
+  <title>ZSXQ 备份阅读器</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f2ede5;
+      --paper-deep: #e9e1d6;
+      --surface: #fbf8f3;
+      --surface-strong: #fffdf9;
+      --ink: #252421;
+      --ink-soft: #68615a;
+      --line: #d8cec1;
+      --line-strong: #c5b9aa;
+      --accent: #bc4d39;
+      --accent-dark: #8d3528;
+      --accent-wash: #f5ddd5;
+      --olive: #65715a;
+      --shadow: 0 18px 50px rgba(75, 59, 43, .09);
+      --radius: 12px;
+      --sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --serif: "Iowan Old Style", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--paper); }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    a { color: var(--accent-dark); }
+    ::selection { background: #e9aa96; color: #241b17; }
+
+    .shell { min-height: 100vh; }
+    .masthead {
+      position: relative;
+      overflow: hidden;
+      min-height: 232px;
+      padding: clamp(28px, 5vw, 66px) clamp(20px, 6vw, 88px) 34px;
+      isolation: isolate;
+      background: #493e36;
+      color: #fffaf3;
+    }
+    .masthead::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background-image: var(--cover);
+      background-position: center 42%;
+      background-size: cover;
+      filter: saturate(.8) contrast(.9);
+      opacity: .34;
+    }
+    .masthead::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background: rgba(57, 44, 36, .73);
+    }
+    .masthead-inner { max-width: 1500px; margin: 0 auto; }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      color: #f2c8bb;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 28px; height: 1px; background: #f2c8bb; }
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(32px, 5vw, 64px);
+      font-weight: 500;
+      letter-spacing: 0;
+      line-height: 1.06;
+    }
+    .lede {
+      max-width: 690px;
+      margin: 16px 0 0;
+      color: #efe4d8;
+      font-size: 15px;
+    }
+    .masthead-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 22px;
+      margin-top: 22px;
+      color: #f7eee6;
+      font-size: 12px;
+    }
+    .masthead-meta strong { color: #fffaf3; font-weight: 700; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+      width: min(1500px, calc(100% - 40px));
+      min-height: calc(100vh - 232px);
+      margin: 0 auto;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .index {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: #f8f3ec;
+    }
+    .index-tools {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 22px 20px 16px;
+      background: color-mix(in srgb, #f8f3ec 94%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--line);
+    }
+    .search-wrap { position: relative; }
+    .search-wrap::before {
+      content: "⌕";
+      position: absolute;
+      top: 9px;
+      left: 12px;
+      color: var(--ink-soft);
+      font-size: 20px;
+      line-height: 1;
+    }
+    #search {
+      width: 100%;
+      height: 42px;
+      padding: 0 12px 0 37px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      outline: 0;
+      background: var(--surface-strong);
+      color: var(--ink);
+    }
+    #search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+    .filter-row { display: flex; gap: 6px; margin-top: 12px; }
+    .filter-btn, .sort-select {
+      height: 31px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font-size: 12px;
+      transition: border-color .18s ease, color .18s ease, background .18s ease, transform .18s ease;
+    }
+    .filter-btn { padding: 0 11px; }
+    .filter-btn:hover, .sort-select:hover { border-color: var(--accent); color: var(--accent-dark); }
+    .filter-btn.active { border-color: var(--accent); background: var(--accent); color: #fffaf3; }
+    .sort-select { max-width: 116px; padding: 0 8px; border-radius: 7px; }
+    .secondary-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 11px; }
+    .check-label { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); font-size: 12px; cursor: pointer; }
+    .check-label input { accent-color: var(--accent); }
+    .result-count { color: var(--ink-soft); font-size: 12px; }
+    .topic-list { list-style: none; overflow: auto; flex: 1; margin: 0; padding: 7px 10px 22px; }
+    .topic-item { margin: 0; }
+    .topic-button {
+      display: block;
+      width: 100%;
+      padding: 13px 10px 14px;
+      border: 0;
+      border-bottom: 1px solid rgba(216, 206, 193, .75);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      transition: background .18s ease, padding-left .18s ease;
+    }
+    .topic-button:hover { background: #f1e8dd; padding-left: 13px; }
+    .topic-button[aria-current="true"] { background: var(--surface-strong); box-shadow: inset 3px 0 0 var(--accent); }
+    .topic-kicker { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-soft); font-size: 10px; letter-spacing: .04em; }
+    .topic-type { color: var(--accent-dark); font-weight: 700; text-transform: uppercase; }
+    .topic-title { display: -webkit-box; overflow: hidden; margin-top: 3px; color: var(--ink); font-family: var(--serif); font-size: 16px; line-height: 1.32; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .topic-excerpt { display: -webkit-box; overflow: hidden; margin-top: 4px; color: var(--ink-soft); font-size: 12px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .topic-badges { display: flex; gap: 7px; margin-top: 7px; color: var(--ink-soft); font-size: 10px; }
+    .topic-badges span + span::before { content: "·"; margin-right: 7px; color: var(--line-strong); }
+    .empty-index { padding: 28px 20px; color: var(--ink-soft); text-align: center; }
+
+    .reader { min-width: 0; background: var(--surface-strong); }
+    .reader-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 69px;
+      padding: 16px clamp(20px, 4vw, 54px);
+      border-bottom: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: 12px;
+    }
+    .toolbar-status { display: flex; align-items: center; gap: 8px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--olive); }
+    .toolbar-actions { display: flex; gap: 7px; }
+    .icon-action {
+      width: 34px;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      transition: border-color .18s ease, color .18s ease, background .18s ease;
+    }
+    .icon-action:hover { border-color: var(--accent); background: var(--accent-wash); color: var(--accent-dark); }
+    .article { max-width: 860px; margin: 0 auto; padding: clamp(32px, 6vw, 78px) clamp(22px, 6vw, 76px) 100px; }
+    .article-eyebrow { display: flex; align-items: center; gap: 11px; color: var(--accent-dark); font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+    .article-eyebrow::after { content: ""; height: 1px; width: 42px; background: var(--accent); opacity: .65; }
+    .article h2 { margin: 17px 0 15px; font-family: var(--serif); font-size: clamp(30px, 4.5vw, 53px); font-weight: 500; line-height: 1.15; }
+    .article-meta { display: flex; flex-wrap: wrap; gap: 7px 15px; color: var(--ink-soft); font-size: 12px; }
+    .article-meta strong { color: var(--ink); font-weight: 700; }
+    .article-rule { height: 1px; margin: 30px 0 31px; background: var(--line); }
+    .article-content { color: #35312d; font-family: var(--serif); font-size: 18px; line-height: 1.9; }
+    .article-content p { min-height: 1.9em; margin: 0 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .article-content a { color: var(--accent-dark); text-decoration-color: #d9a296; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .full-article h1, .full-article h2, .full-article h3, .full-article h4 { margin: 2em 0 .65em; color: var(--ink); font-family: var(--serif); font-weight: 600; line-height: 1.35; }
+    .full-article h1 { font-size: 1.7em; }
+    .full-article h2 { font-size: 1.45em; }
+    .full-article h3 { font-size: 1.2em; }
+    .full-article ul, .full-article ol { margin: 0 0 1.4em; padding-left: 1.5em; }
+    .full-article li { margin: .38em 0; }
+    .full-article blockquote { margin: 1.5em 0; padding: .1em 0 .1em 1.15em; border-left: 2px solid var(--accent); color: var(--ink-soft); }
+    .full-article blockquote p { margin-bottom: .6em; }
+    .full-article pre { overflow: auto; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: #f4eee6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78em; line-height: 1.6; }
+    .full-article code { padding: .08em .25em; border-radius: 3px; background: #eee6dc; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .84em; }
+    .full-article pre code { padding: 0; background: transparent; }
+    .full-article img { display: block; max-width: 100%; height: auto; margin: 1.6em auto; border-radius: 6px; }
+    .full-article hr { height: 1px; margin: 2.6em 0; border: 0; background: var(--line); }
+    .answer, .comments, .attachments { margin-top: 42px; padding-top: 24px; border-top: 1px solid var(--line); }
+    .section-label { margin: 0 0 14px; color: var(--accent-dark); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .answer { border-top-color: #d9a296; }
+    .answer .article-content { padding-left: 17px; border-left: 2px solid var(--accent); }
+    .comment { margin: 0 0 13px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #faf6ef; font-family: var(--sans); font-size: 13px; }
+    .comment-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; color: var(--ink-soft); font-size: 11px; }
+    .comment-head strong { color: var(--ink); }
+    .comment p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .attachments-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .attachment { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; background: #faf6ef; color: var(--ink); font-family: var(--sans); font-size: 12px; text-decoration: none; }
+    .attachment:hover { border-color: var(--accent); color: var(--accent-dark); }
+    .article-placeholder { display: grid; min-height: 520px; place-items: center; padding: 32px; color: var(--ink-soft); text-align: center; }
+    .placeholder-mark { display: block; margin-bottom: 14px; color: var(--accent); font-family: var(--serif); font-size: 58px; line-height: 1; }
+    .no-results { padding: 24px 10px; color: var(--ink-soft); font-size: 13px; }
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 5; transform: translateY(12px); padding: 10px 14px; border: 1px solid #b9a899; border-radius: 7px; background: #2e2925; color: #fffaf3; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    @media (max-width: 840px) {
+      .masthead { min-height: 210px; padding-bottom: 28px; }
+      .workspace { grid-template-columns: 1fr; width: 100%; margin: 0; box-shadow: none; }
+      .index { border-right: 0; border-bottom: 1px solid var(--line); }
+      .index-tools { position: static; }
+      .topic-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 395px; overflow: auto; padding: 7px 12px 18px; }
+      .topic-button { min-height: 132px; }
+      .reader-toolbar { min-height: 58px; }
+      .article { padding-top: 40px; }
+    }
+    @media (max-width: 520px) {
+      .masthead { min-height: 246px; padding: 29px 19px 28px; }
+      h1 { font-size: 36px; }
+      .lede { font-size: 14px; }
+      .topic-list { grid-template-columns: 1fr; max-height: 340px; }
+      .topic-button { min-height: 0; }
+      .reader-toolbar { padding: 13px 19px; }
+      .article { padding: 31px 19px 70px; }
+      .article h2 { font-size: 34px; }
+      .article-content { font-size: 17px; line-height: 1.82; }
+      .toolbar-status span:last-child { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead" id="masthead">
+      <div class="masthead-inner">
+        <div class="eyebrow">ZSXQ / Archive</div>
+        <h1 id="group-name">备份阅读器</h1>
+        <p class="lede" id="group-description">正在载入备份内容……</p>
+        <div class="masthead-meta" id="group-meta"></div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="index" aria-label="主题索引">
+        <div class="index-tools">
+          <label class="search-wrap" for="search">
+            <input id="search" type="search" placeholder="搜索标题、正文、作者" autocomplete="off">
+          </label>
+          <div class="filter-row" role="group" aria-label="主题类型">
+            <button class="filter-btn active" type="button" data-type="all">全部</button>
+            <button class="filter-btn" type="button" data-type="talk">分享</button>
+            <button class="filter-btn" type="button" data-type="q&a">问答</button>
+          </div>
+          <div class="secondary-row">
+            <label class="check-label"><input id="digested" type="checkbox"> 只看精华</label>
+            <select id="sort" class="sort-select" aria-label="排序">
+              <option value="newest">最新优先</option>
+              <option value="oldest">最早优先</option>
+            </select>
+            <span class="result-count" id="result-count"></span>
+          </div>
+        </div>
+        <ul class="topic-list" id="topic-list" aria-label="主题列表"></ul>
+      </aside>
+
+      <section class="reader" aria-live="polite">
+        <div class="reader-toolbar">
+          <div class="toolbar-status"><span class="status-dot"></span><span id="reader-status">从备份中读取</span></div>
+          <div class="toolbar-actions">
+            <button class="icon-action" id="copy-link" type="button" title="复制当前主题链接" aria-label="复制当前主题链接">↗</button>
+            <button class="icon-action" id="open-source" type="button" title="打开原始主题" aria-label="打开原始主题">⌁</button>
+          </div>
+        </div>
+        <article class="article" id="article"></article>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="zsxq_viewer_data.js"></script>
+  <script>
+    (() => {
+      const data = window.ZSXQ_BACKUP;
+      if (!data) return;
+      const topics = Array.isArray(data.topics) ? data.topics : [];
+      const manifest = Array.isArray(data.media) ? data.media : [];
+      const mediaByTopic = new Map();
+      manifest.forEach((item) => {
+        const key = String(item.topic_id);
+        if (!mediaByTopic.has(key)) mediaByTopic.set(key, []);
+        mediaByTopic.get(key).push(item);
+      });
+      const state = { type: "all", query: "", digested: false, sort: "newest", selected: null };
+      const $ = (selector) => document.querySelector(selector);
+      const listEl = $("#topic-list");
+      const articleEl = $("#article");
+      const toastEl = $("#toast");
+
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[char]));
+      const decode = (value) => {
+        try { return decodeURIComponent(value); } catch { return value; }
+      };
+      const attrs = (raw) => Object.fromEntries([...raw.matchAll(/([a-zA-Z_]+)="(.*?)"/gs)].map((match) => [match[1], decode(match[2])]));
+      const renderInline = (value) => {
+        const text = String(value ?? "");
+        const entityPattern = /<e\s+type="([^"]+)"([^>]*)\s*\/>/g;
+        let html = "";
+        let cursor = 0;
+        for (const match of text.matchAll(entityPattern)) {
+          html += escapeHtml(text.slice(cursor, match.index));
+          const item = attrs(match[2]);
+          const type = match[1];
+          const label = item.title || item.name || (type === "hashtag" ? "#话题" : `[${type}]`);
+          if (type === "web" && item.href) {
+            html += `<a href="${escapeHtml(item.href)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+          } else if (type === "text_bold") {
+            html += `<strong>${escapeHtml(label)}</strong>`;
+          } else {
+            html += escapeHtml(label);
+          }
+          cursor = match.index + match[0].length;
+        }
+        return html + escapeHtml(text.slice(cursor));
+      };
+      const renderParagraphs = (value, className = "") => {
+        const paragraphs = String(value ?? "").split(/\n\s*\n/);
+        return `<div class="article-content ${className}">${paragraphs.map((paragraph) => `<p>${renderInline(paragraph.trim()) || "&nbsp;"}</p>`).join("")}</div>`;
+      };
+      const dateLabel = (value) => {
+        const date = new Date(String(value).replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+        if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+        return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
+      };
+      const contentFor = (topic) => {
+        if (topic.talk) return topic.talk;
+        if (topic.question) return topic.question;
+        if (topic.task) return topic.task;
+        if (topic.solution) return topic.solution;
+        return {};
+      };
+      const fullTextFor = (topic) => contentFor(topic).article?.content_text || contentFor(topic).text || "";
+      const topicText = (topic) => {
+        const content = contentFor(topic);
+        return [topic.title, fullTextFor(topic), topic.answer?.text, content.owner?.name, topic.answer?.owner?.name].filter(Boolean).join(" ");
+      };
+      const titleFor = (topic) => topic.title || String(contentFor(topic).text || "未命名主题").split(/\n/)[0].slice(0, 80) || "未命名主题";
+      const excerptFor = (topic) => String(fullTextFor(topic) || topic.answer?.text || "").replace(/<e[^>]+\/>/g, "").replace(/\s+/g, " ").trim().slice(0, 145);
+      const filteredTopics = () => topics.filter((topic) => {
+        if (state.type !== "all" && topic.type !== state.type) return false;
+        if (state.digested && !topic.digested) return false;
+        if (state.query && !topicText(topic).toLowerCase().includes(state.query.toLowerCase())) return false;
+        return true;
+      }).sort((a, b) => {
+        const direction = state.sort === "oldest" ? 1 : -1;
+        return direction * String(a.create_time || "").localeCompare(String(b.create_time || ""));
+      });
+      const showToast = (message) => {
+        toastEl.textContent = message;
+        toastEl.classList.add("show");
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => toastEl.classList.remove("show"), 2200);
+      };
+      const selectTopic = (topicId, updateHash = true) => {
+        const topic = topics.find((item) => String(item.topic_id) === String(topicId));
+        if (!topic) return;
+        state.selected = String(topic.topic_id);
+        if (updateHash) history.replaceState(null, "", `#topic-${state.selected}`);
+        renderList();
+        renderArticle(topic);
+      };
+      const renderList = () => {
+        const visible = filteredTopics();
+        $("#result-count").textContent = `${visible.length} / ${topics.length}`;
+        if (!visible.length) {
+          listEl.innerHTML = `<li class="no-results">没有符合条件的主题。<br>试试更短的关键词，或清除精华筛选。</li>`;
+          return;
+        }
+        listEl.innerHTML = visible.map((topic) => {
+          const id = String(topic.topic_id);
+          const content = contentFor(topic);
+          const owner = content.owner?.name || topic.answer?.owner?.name || "匿名用户";
+          return `<li class="topic-item"><button class="topic-button" type="button" data-id="${escapeHtml(id)}" aria-current="${id === state.selected}">
+            <span class="topic-kicker"><span class="topic-type">${topic.type === "q&a" ? "问答" : "分享"}</span><span>${dateLabel(topic.create_time)}</span></span>
+            <span class="topic-title">${escapeHtml(titleFor(topic))}</span>
+            <span class="topic-excerpt">${escapeHtml(excerptFor(topic))}</span>
+            <span class="topic-badges"><span>${escapeHtml(owner)}</span>${topic.digested ? "<span>精华</span>" : ""}<span>${topic.comments_count || 0} 条回应</span></span>
+          </button></li>`;
+        }).join("");
+      };
+      const renderArticle = (topic) => {
+        const content = contentFor(topic);
+        const owner = content.owner?.name || (content.anonymous ? "匿名用户" : "未知作者");
+        const answer = topic.answer;
+        const comments = Array.isArray(topic.show_comments) ? topic.show_comments : [];
+        const media = mediaByTopic.get(String(topic.topic_id)) || [];
+        const source = `https://wx.zsxq.com/topic/${topic.topic_id}`;
+        articleEl.innerHTML = `<div class="article-eyebrow">${topic.type === "q&a" ? "Question & Answer" : "Field Note"}${topic.digested ? " · 精华" : ""}</div>
+          <h2>${escapeHtml(titleFor(topic))}</h2>
+          <div class="article-meta"><span><strong>${escapeHtml(owner)}</strong></span><span>${dateLabel(topic.create_time)}</span><span>${topic.likes_count || 0} 个赞</span><span>${topic.readers_count || 0} 次阅读</span></div>
+          <div class="article-rule"></div>
+          ${content.article?.content_html ? `<div class="article-content full-article">${content.article.content_html}</div>` : renderParagraphs(content.text || "（没有正文）")}
+          ${answer ? `<section class="answer"><h3 class="section-label">回答 · ${escapeHtml(answer.owner?.name || "作者")}</h3>${renderParagraphs(answer.text || "（没有回答正文）")}</section>` : ""}
+          ${comments.length ? `<section class="comments"><h3 class="section-label">回应 · ${comments.length}</h3>${comments.map((comment) => `<div class="comment"><div class="comment-head"><strong>${escapeHtml(comment.owner?.name || "匿名用户")}</strong><span>${dateLabel(comment.create_time)}</span></div><p>${renderInline(comment.text || "")}</p></div>`).join("")}</section>` : ""}
+          ${media.length ? `<section class="attachments"><h3 class="section-label">附件 · ${media.length}</h3><div class="attachments-list">${media.map((item) => `<a class="attachment" href="${escapeHtml(data.artifactRoot + "/" + item.path)}" target="_blank" rel="noreferrer">↳ ${escapeHtml(item.path.split("/").pop())}</a>`).join("")}</div></section>` : ""}`;
+        $("#reader-status").textContent = `主题 ${topics.findIndex((item) => item.topic_id === topic.topic_id) + 1} / ${topics.length}`;
+        $("#open-source").disabled = false;
+        $("#open-source").onclick = () => window.open(source, "_blank", "noopener,noreferrer");
+      };
+      const initialize = () => {
+        const group = data.group || {};
+        document.title = `${group.name || "ZSXQ"} · ZSXQ 备份阅读器`;
+        $("#masthead").style.setProperty("--cover", `url("${String(group.background_url || "").replace(/"/g, "\\\"")}")`);
+        $("#group-name").textContent = group.name || "ZSXQ 备份";
+        $("#group-description").textContent = String(group.description || "API-visible topics backed up for offline reading.").split(/\n\s*\n/)[0];
+        $("#group-meta").innerHTML = `<span><strong>${topics.length}</strong> 个主题</span><span><strong>${topics.filter((topic) => topic.digested).length}</strong> 篇精华</span><span><strong>${manifest.length}</strong> 个附件</span><span>更新于 <strong>${dateLabel(group.update_time)}</strong></span>`;
+        const hashId = location.hash.match(/^#topic-(.+)$/)?.[1];
+        state.selected = topics.some((topic) => String(topic.topic_id) === hashId) ? hashId : String(topics[0]?.topic_id || "");
+        renderList();
+        if (state.selected) renderArticle(topics.find((topic) => String(topic.topic_id) === state.selected));
+        else articleEl.innerHTML = `<div class="article-placeholder"><div><span class="placeholder-mark">§</span>没有可显示的主题</div></div>`;
+      };
+      $("#search").addEventListener("input", (event) => { state.query = event.target.value.trim(); renderList(); });
+      $("#digested").addEventListener("change", (event) => { state.digested = event.target.checked; renderList(); });
+      $("#sort").addEventListener("change", (event) => { state.sort = event.target.value; renderList(); });
+      document.querySelectorAll("[data-type]").forEach((button) => button.addEventListener("click", () => {
+        state.type = button.dataset.type;
+        document.querySelectorAll("[data-type]").forEach((item) => item.classList.toggle("active", item === button));
+        renderList();
+      }));
+      listEl.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-id]");
+        if (button) selectTopic(button.dataset.id);
+      });
+      $("#copy-link").addEventListener("click", async () => {
+        const link = `${location.href.split("#")[0]}#topic-${state.selected}`;
+        try { await navigator.clipboard.writeText(link); showToast("主题链接已复制"); }
+        catch { showToast("当前浏览器不允许复制，请直接复制地址栏"); }
+      });
+      document.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); }
+        if (event.key === "Escape" && document.activeElement === $("#search")) { $("#search").value = ""; state.query = ""; renderList(); }
+      });
+      initialize();
+    })();
+  </script>
+</body>
+</html>
