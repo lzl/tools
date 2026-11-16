@@ -43,7 +43,7 @@ class ForwardTests(unittest.TestCase):
 
     def test_workflow_sequence_and_summary(self):
         with tempfile.TemporaryDirectory() as directory:
-            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False)
+            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False,import_legacy=None)
             with patch.object(workflow,'run_atom',side_effect=[{'status':'completed'},{'status':'verified'}]) as call:
                 result=workflow.execute(args)
             self.assertEqual(call.call_count,2)
@@ -53,18 +53,18 @@ class ForwardTests(unittest.TestCase):
 
     def test_failure_stops_verification(self):
         with tempfile.TemporaryDirectory() as directory:
-            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False)
+            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False,import_legacy=None)
             with patch.object(workflow,'run_atom',side_effect=RuntimeError('atom failed')) as call:
                 with self.assertRaises(RuntimeError): workflow.execute(args)
             self.assertEqual(call.call_count,1)
 
-    def test_completed_pair_cannot_accidentally_replay(self):
+    def test_completed_pair_invokes_incremental_forward(self):
         with tempfile.TemporaryDirectory() as directory:
             pair=Path(directory)/'-1001_to_-1002';pair.mkdir()
             (pair/'progress.json').write_text('{"status":"completed"}')
-            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False)
-            with patch.object(workflow,'run_atom') as call:
-                with self.assertRaises(ValueError):workflow.execute(args)
-            call.assert_not_called()
+            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False,import_legacy=None)
+            with patch.object(workflow,'run_atom',return_value={'status':'verified'}) as call:
+                workflow.execute(args)
+            self.assertEqual(call.call_count,2)
 
 if __name__=='__main__':unittest.main()

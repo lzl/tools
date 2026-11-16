@@ -162,8 +162,16 @@ async def run(args):
                     raise RuntimeError('No progress after four attempts; pending retained, not blindly retried')
 
         if args.mode == 'forward':
+            if state.get('import_requires_verification'):
+                raise RuntimeError('Imported state requires successful --verify-only before forwarding')
             if state.get('status') == 'completed':
-                return state
+                latest = await client.get_messages(source, limit=1)
+                cutoff = latest[0].id if latest else 0
+                if cutoff <= state['cutoff']:
+                    return state
+                # Previous cutoff, not last regular message: service-only tails must not replay.
+                state['cursor'] = state['cutoff']
+                state['cutoff'] = cutoff
             state['status'] = 'running'
             save(path, state)
             if 'pending' in state:
@@ -213,6 +221,8 @@ async def run(args):
         save(path.parent/'verification.json',result)
         if result['missing'] or result['extra'] or not result['ordered_equal'] or len(b)!=state['forwarded']:
             raise RuntimeError('Verification failed; inspect verification.json and evidence files')
+        if state.pop('import_requires_verification', False):
+            save(path, state)
         return result
     finally:
         await client.disconnect()

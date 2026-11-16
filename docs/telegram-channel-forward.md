@@ -24,7 +24,7 @@ uv run workflows/forward_telegram_channel.py \
 
 On macOS, optionally prefix the command with `caffeinate -i`. Fixed policy: at most **30 messages per forwarding request**, **108 seconds after each request**. No rate arguments are exposed. API latency, reconciliation, server backoff and cooldowns add time, so throughput is below the theoretical 1,000 messages/hour. No rate guarantees immunity from limits.
 
-The initial run snapshots the latest source message ID. Later posts are deliberately outside this job. Service messages cannot be forwarded. Existing destination history is left untouched; verification covers only the new destination range.
+Each completed cycle snapshots the latest source message ID. An interrupted cycle resumes its existing cutoff. After completion, rerunning the same command extends the cutoff and forwards only messages with IDs greater than the previous cutoff. Old-message edits/deletions are not synchronized. Verification still covers the entire accumulated migration. Service messages cannot be forwarded. Existing destination history is left untouched; verification covers only the new destination range.
 
 ## Resume / recover
 
@@ -64,9 +64,21 @@ uv run workflows/forward_telegram_channel.py \
   --source-id=-1001234567890 --target-id=-1009876543210 --verify-only
 ```
 
-A completed pair is not automatically replayed on a normal invocation. To run an intentionally separate snapshot, use another `--artifacts-root`, knowing this does **not** deduplicate against previous jobs or existing destination messages.
+A completed pair automatically performs an incremental cycle on a normal invocation; with no new posts it only verifies. Keep the same artifacts root to preserve deduplication history. A different `--artifacts-root` starts a new job and does **not** deduplicate against existing destination history.
 
-**Legacy migration warning:** this workflow does not import state from `artifacts/legacy_telegram_forward/`. Running it against the previously migrated pair creates a NEW job and would forward the old content again. Do not run that pair as a new job unless duplicate forwarding is intentional.
+## Import the audited legacy migration
+
+On the FIRST workflow invocation for this pair, explicitly import the completed old migration:
+
+```bash
+caffeinate -i uv run workflows/forward_telegram_channel.py \
+  --source-id=-1001234567890 --target-id=-1009876543210 \
+  --import-legacy artifacts/legacy_telegram_forward
+```
+
+The importer validates the completed legacy state, successful audit, mapping and evidence hashes. It imports the recorded source cutoff and historical destination range, then performs a fresh live full verification BEFORE any new forwarding. Import verification failure leaves a persistent safety gate blocking forwarding; inspect the mismatch and use `--verify-only` to clear the gate after successful verification. Never delete the imported state to bypass a failed audit.
+
+Subsequent invocations omit `--import-legacy` and use the same source/target IDs. Only posts after the last completed cutoff are sent. Import refuses to overwrite an existing workflow state. Starting this pair WITHOUT importing on its first invocation would duplicate historical messages.
 
 ## Implementation
 

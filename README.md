@@ -45,7 +45,7 @@ uv run workflows/forward_telegram_channel.py \
   --source-id=-1001234567890 --target-id=-1009876543210
 ```
 
-See [Telegram channel forwarding](docs/telegram-channel-forward.md) for credentials, recovery, evidence, and limitations. **This workflow does not import an existing legacy job's progress; starting that pair as a new job would duplicate its existing content.**
+See [Telegram channel forwarding](docs/telegram-channel-forward.md) for credentials, recovery, evidence, and limitations. Completed jobs support incremental sync on rerun. For an audited legacy migration, use `--import-legacy artifacts/legacy_telegram_forward` on the first invocation to verify and import its progress; starting that pair without importing would duplicate existing content.
 
 ### telegram-media
 

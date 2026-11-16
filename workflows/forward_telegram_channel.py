@@ -28,6 +28,33 @@ def run_atom(arguments):
     return result
 
 
+def import_legacy(directory, destination, source_id, target_id):
+    """Import only an audited completed legacy job; verification occurs before any writes."""
+    import hashlib
+    legacy=json.loads((directory/'progress.json').read_text())
+    audit=json.loads((directory/'audit-summary.json').read_text())
+    if (legacy['source'],legacy['target']) != (source_id,target_id):
+        raise ValueError('Legacy source/target mismatch')
+    if legacy['status']!='completed' or 'pending' in legacy:
+        raise ValueError('Legacy job must be complete with no pending intent')
+    if (audit['missing_count'] or audit['extra_count'] or not audit['ordered_content_identical']
+            or audit['target_forwarded_count']!=legacy['forwarded']
+            or audit['last_pair']['source_id']!=legacy['cutoff_message_id']):
+        raise ValueError('Legacy audit does not prove a complete matching snapshot')
+    for name, digest in audit['evidence_sha256'].items():
+        if hashlib.sha256((directory/name).read_bytes()).hexdigest()!=digest:
+            raise ValueError(f'Legacy audit evidence changed: {name}')
+    mapping=[json.loads(line) for line in (directory/'audit-mapping.jsonl').read_text().splitlines()]
+    if len(mapping)!=legacy['forwarded'] or not all(r['content_matches'] for r in mapping):
+        raise ValueError('Invalid legacy mapping')
+    baseline=mapping[0]['target_id']-1
+    imported={'version':1,'source_id':source_id,'target_id':target_id,
+              'cutoff':legacy['cutoff_message_id'],'cursor':legacy['cutoff_message_id'],
+              'target_baseline':baseline,'forwarded':legacy['forwarded'],
+              'status':'completed','not_before':0,'import_requires_verification':True,'legacy_import':str(directory.resolve())}
+    destination.write_text(json.dumps(imported,ensure_ascii=False,indent=2))
+
+
 def execute(args):
     pair=args.artifacts_root.resolve()/f'{args.source_id}_to_{args.target_id}'
     pair.mkdir(parents=True,exist_ok=True)
@@ -36,10 +63,10 @@ def execute(args):
         state=pair/'progress.json'
         if args.verify_only and not state.exists():
             raise ValueError('No previous state to verify')
-        if state.exists():
-            previous=json.loads(state.read_text())
-            if previous.get('status')=='completed' and not args.verify_only:
-                raise ValueError('This pair already completed. Use --verify-only, or a different --artifacts-root for an explicitly new job. Do not restart blindly.')
+        if args.import_legacy:
+            if state.exists():
+                raise ValueError('Cannot import over existing workflow state')
+            import_legacy(args.import_legacy, state, args.source_id, args.target_id)
         run_dir=pair/'runs'/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid4().hex[:8])
         run_dir.mkdir(parents=True)
         common=['--source-id',str(args.source_id),'--target-id',str(args.target_id),
@@ -49,6 +76,9 @@ def execute(args):
         result={'artifacts_dir':str(run_dir),'state':str(state)}
         print(f'Progress: {state}',file=sys.stderr,flush=True)
         try:
+            if args.import_legacy:
+                # Require a fresh live full verification before extending the imported snapshot.
+                result['import_verification']=run_atom([*common,'--mode','verify'])
             if not args.verify_only:
                 result['forward']=run_atom([*common,'--mode','forward'])
             result['verification']=run_atom([*common,'--mode','verify'])
@@ -69,6 +99,7 @@ def main():
     parser.add_argument('--artifacts-root',type=Path,default=ROOT/'artifacts/telegram_channel_forward')
     parser.add_argument('--recover-stale',action='store_true',help='Authorize verified recovery of old uncertain writes; assumes no destination deletions')
     parser.add_argument('--verify-only',action='store_true')
+    parser.add_argument('--import-legacy',type=Path,help='Import an audited legacy job directory, then verify live before forwarding')
     parser.add_argument('--json',action='store_true')
     args=parser.parse_args()
     if args.source_id==args.target_id:
