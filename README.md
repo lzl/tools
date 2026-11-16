@@ -36,6 +36,17 @@ Each tool uses PEP 723 inline script metadata to declare dependencies, making th
 
 ## Available Tools
 
+### telegram-channel-forward
+
+Forward a source channel snapshot to a target with resumable state and full content verification. Fixed policy: 30 messages per request, 108 seconds between requests; Telegram cooldowns take priority.
+
+```bash
+uv run workflows/forward_telegram_channel.py \
+  --source-id=-1001234567890 --target-id=-1009876543210
+```
+
+See [Telegram channel forwarding](docs/telegram-channel-forward.md) for credentials, recovery, evidence, and limitations. **This workflow does not import an existing legacy job's progress; starting that pair as a new job would duplicate its existing content.**
+
 ### telegram-media
 
 Download all images and videos from a Telegram channel with Telethon, using
