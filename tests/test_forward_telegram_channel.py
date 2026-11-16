@@ -43,7 +43,7 @@ class ForwardTests(unittest.TestCase):
 
     def test_workflow_sequence_and_summary(self):
         with tempfile.TemporaryDirectory() as directory:
-            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False,import_legacy=None)
+            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,verify_after=True,recover_stale=False,import_legacy=None)
             with patch.object(workflow,'run_atom',side_effect=[{'status':'completed'},{'status':'verified'}]) as call:
                 result=workflow.execute(args)
             self.assertEqual(call.call_count,2)
@@ -62,9 +62,11 @@ class ForwardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pair=Path(directory)/'-1001_to_-1002';pair.mkdir()
             (pair/'progress.json').write_text('{"status":"completed"}')
-            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,recover_stale=False,import_legacy=None)
-            with patch.object(workflow,'run_atom',return_value={'status':'verified'}) as call:
-                workflow.execute(args)
-            self.assertEqual(call.call_count,2)
+            args=SimpleNamespace(source_id=-1001,target_id=-1002,artifacts_root=Path(directory),verify_only=False,verify_after=False,recover_stale=False,import_legacy=None)
+            with patch.object(workflow,'run_atom',return_value={'status':'completed'}) as call:
+                result=workflow.execute(args)
+            self.assertEqual(call.call_count,1)
+            self.assertEqual(result['status'],'completed')
+            self.assertTrue(result['verification_skipped'])
 
 if __name__=='__main__':unittest.main()

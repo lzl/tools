@@ -1,6 +1,6 @@
 # Telegram channel forwarding workflow
 
-Forward an initial snapshot of a source channel/supergroup into a target channel/supergroup, then perform a full read-only content verification. Source and target IDs must differ and begin with `-100`.
+Forward an initial snapshot of a source channel/supergroup into a target channel/supergroup. Post-forward full verification is skipped by default; opt in with `--verify-after` or run it separately with `--verify-only`. Source and target IDs must differ and begin with `-100`.
 
 ## Setup
 
@@ -24,7 +24,7 @@ uv run workflows/forward_telegram_channel.py \
 
 On macOS, optionally prefix the command with `caffeinate -i`. Fixed policy: at most **30 messages per forwarding request**, **108 seconds after each request**. No rate arguments are exposed. API latency, reconciliation, server backoff and cooldowns add time, so throughput is below the theoretical 1,000 messages/hour. No rate guarantees immunity from limits.
 
-Each completed cycle snapshots the latest source message ID. An interrupted cycle resumes its existing cutoff. After completion, rerunning the same command extends the cutoff and forwards only messages with IDs greater than the previous cutoff. Old-message edits/deletions are not synchronized. Verification still covers the entire accumulated migration. Service messages cannot be forwarded. Existing destination history is left untouched; verification covers only the new destination range.
+Each completed cycle snapshots the latest source message ID. An interrupted cycle resumes its existing cutoff. After completion, rerunning the same command extends the cutoff and forwards only messages with IDs greater than the previous cutoff. Old-message edits/deletions are not synchronized. When requested, verification covers the entire accumulated migration. Service messages cannot be forwarded. Existing destination history is left untouched; verification covers only the new destination range.
 
 ## Resume / recover
 
@@ -48,7 +48,7 @@ This verifies remaining source content, waits 30 seconds and rechecks the target
 
 ## Verification and evidence
 
-After forwarding completes, the workflow invokes the atom again in read-only verification mode. It compares exact text and document/photo media IDs, including multiplicity and full ordering. Forwarded timestamps, entity auto-parsing and web previews are intentionally excluded. This is not a byte-for-byte media download audit or a complete validation of all possible Telegram media types.
+By default, forwarding completion does not trigger a full scan. Add `--verify-after` to invoke the atom again in read-only verification mode after forwarding. Per-request delivery reconciliation always remains enabled. The mandatory pre-forward verification for legacy imports is unchanged. It compares exact text and document/photo media IDs, including multiplicity and full ordering. Forwarded timestamps, entity auto-parsing and web previews are intentionally excluded. This is not a byte-for-byte media download audit or a complete validation of all possible Telegram media types.
 
 Files in the pair directory:
 
@@ -64,7 +64,7 @@ uv run workflows/forward_telegram_channel.py \
   --source-id=-1001234567890 --target-id=-1009876543210 --verify-only
 ```
 
-A completed pair automatically performs an incremental cycle on a normal invocation; with no new posts it only verifies. Keep the same artifacts root to preserve deduplication history. A different `--artifacts-root` starts a new job and does **not** deduplicate against existing destination history.
+A completed pair automatically performs an incremental cycle on a normal invocation; with no new posts it finishes without a full scan unless verification was explicitly requested. Keep the same artifacts root to preserve deduplication history. A different `--artifacts-root` starts a new job and does **not** deduplicate against existing destination history.
 
 ## Import the audited legacy migration
 

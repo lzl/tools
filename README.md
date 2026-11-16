@@ -38,7 +38,7 @@ Each tool uses PEP 723 inline script metadata to declare dependencies, making th
 
 ### telegram-channel-forward
 
-Forward a source channel snapshot to a target with resumable state and full content verification. Fixed policy: 30 messages per request, 108 seconds between requests; Telegram cooldowns take priority.
+Forward a source channel snapshot to a target with resumable state and optional full content verification (`--verify-after` or `--verify-only`). Fixed policy: 30 messages per request, 108 seconds between requests; Telegram cooldowns take priority.
 
 ```bash
 uv run workflows/forward_telegram_channel.py \

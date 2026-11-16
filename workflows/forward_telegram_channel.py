@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Forward a channel snapshot, resume safely, then verify all transferred content."""
+"""Forward and resume channel snapshots, with optional full verification."""
 from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
@@ -81,8 +81,13 @@ def execute(args):
                 result['import_verification']=run_atom([*common,'--mode','verify'])
             if not args.verify_only:
                 result['forward']=run_atom([*common,'--mode','forward'])
-            result['verification']=run_atom([*common,'--mode','verify'])
-            result['status']='verified'
+            if args.verify_only or args.verify_after:
+                print('Starting full verification...',file=sys.stderr,flush=True)
+                result['verification']=run_atom([*common,'--mode','verify'])
+                result['status']='verified'
+            else:
+                result['status']='completed'
+                result['verification_skipped']=True
         except Exception as exc:
             result['status']='failed'
             result['error']=str(exc)
@@ -98,7 +103,9 @@ def main():
     parser.add_argument('--target-id',type=int,required=True)
     parser.add_argument('--artifacts-root',type=Path,default=ROOT/'artifacts/telegram_channel_forward')
     parser.add_argument('--recover-stale',action='store_true',help='Authorize verified recovery of old uncertain writes; assumes no destination deletions')
-    parser.add_argument('--verify-only',action='store_true')
+    verification=parser.add_mutually_exclusive_group()
+    verification.add_argument('--verify-only',action='store_true',help='Only run full verification')
+    verification.add_argument('--verify-after',action='store_true',help='Run full verification after forwarding (skipped by default)')
     parser.add_argument('--import-legacy',type=Path,help='Import an audited legacy job directory, then verify live before forwarding')
     parser.add_argument('--json',action='store_true')
     args=parser.parse_args()
@@ -111,7 +118,8 @@ def main():
     except (Exception,KeyboardInterrupt) as exc:
         print(f'Error: {exc}',file=sys.stderr)
         return 1
-    print(json.dumps(result,ensure_ascii=False) if args.json else f"Completed and verified. Summary: {result['artifacts_dir']}/summary.json")
+    message='Completed and verified' if result['status']=='verified' else 'Forwarding completed (post-forward full verification skipped)'
+    print(json.dumps(result,ensure_ascii=False) if args.json else f"{message}. Summary: {result['artifacts_dir']}/summary.json")
     return 0
 
 if __name__=='__main__':
