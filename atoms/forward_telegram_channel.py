@@ -47,6 +47,10 @@ def fingerprint(message):
 
 
 def check_prefix(observed, expected):
+    # Telegram can reorder messages within a completed multi-message forward.
+    # Only a complete multiset match is safe; unordered partial results remain uncertain.
+    if len(observed) == len(expected) and Counter(observed) == Counter(expected):
+        return len(observed)
     if len(observed) > len(expected) or observed != expected[:len(observed)]:
         raise RuntimeError('Destination differs from pending prefix; manual reconciliation required')
     return len(observed)
@@ -93,7 +97,16 @@ async def run(args):
                           min_id=pending['baseline'], wait_time=2) if isinstance(m, types.Message)]
             if any(not m.fwd_from for m in observed):
                 raise RuntimeError('External destination writes detected; manual reconciliation required')
-            count = check_prefix([fingerprint(m) for m in observed], pending['fingerprints'])
+            observed_fingerprints = [fingerprint(m) for m in observed]
+            count = check_prefix(observed_fingerprints, pending['fingerprints'])
+            if count and observed_fingerprints != pending['fingerprints'][:count]:
+                state.setdefault('reordered_batches', []).append({
+                    'source_ids': pending['ids'][:],
+                    'target_ids': [m.id for m in observed],
+                    'expected': pending['fingerprints'][:],
+                    'observed': observed_fingerprints,
+                })
+                log('Complete batch confirmed with reordered destination messages; recorded in state')
             if count:
                 state['forwarded'] += count
                 state['cursor'] = pending['ids'][count-1]
@@ -213,13 +226,28 @@ async def run(args):
                     handle.write(json.dumps(row)+'\n')
             datasets.append(rows)
         a,b = datasets
+        # Normalize only previously audited complete batches, and only if their
+        # exact destination IDs and fingerprints still match the live evidence.
+        normalized = [dict(row) for row in b]
+        positions = {row['id']: i for i, row in enumerate(b)}
+        for batch in state.get('reordered_batches', []):
+            indices = [positions.get(mid) for mid in batch['target_ids']]
+            if (any(i is None for i in indices)
+                    or [b[i]['fingerprint'] for i in indices] != batch['observed']
+                    or Counter(batch['expected']) != Counter(batch['observed'])):
+                raise RuntimeError('Previously reconciled reordered batch changed; manual reconciliation required')
+            for i, digest in zip(indices, batch['expected']):
+                normalized[i]['fingerprint'] = digest
         ca,cb = Counter(r['fingerprint'] for r in a),Counter(r['fingerprint'] for r in b)
         result = {'status': 'verified', 'source_count':len(a),'target_count':len(b),
                   'missing':sum((ca-cb).values()), 'extra':sum((cb-ca).values()),
                   'ordered_equal':[r['fingerprint'] for r in a]==[r['fingerprint'] for r in b],
                   'cutoff':state['cutoff'], 'verified_at':datetime.now(timezone.utc).isoformat()}
         save(path.parent/'verification.json',result)
-        if result['missing'] or result['extra'] or not result['ordered_equal'] or len(b)!=state['forwarded']:
+        result['ordered_equal_after_reconciliation'] = (
+            [r['fingerprint'] for r in a] == [r['fingerprint'] for r in normalized])
+        save(path.parent/'verification.json', result)
+        if result['missing'] or result['extra'] or not result['ordered_equal_after_reconciliation'] or len(b)!=state['forwarded']:
             raise RuntimeError('Verification failed; inspect verification.json and evidence files')
         if state.pop('import_requires_verification', False):
             save(path, state)

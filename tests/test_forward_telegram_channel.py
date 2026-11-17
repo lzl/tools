@@ -27,6 +27,13 @@ class ForwardTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): atom.check_prefix(['b'],['a','b'])
         with self.assertRaises(RuntimeError): atom.check_prefix(['a','b'],['a'])
 
+    def test_complete_reordered_batch(self):
+        self.assertEqual(atom.check_prefix(['b', 'a', 'a'], ['a', 'b', 'a']), 3)
+        with self.assertRaises(RuntimeError):
+            atom.check_prefix(['b', 'a'], ['a', 'b', 'c'])
+        with self.assertRaises(RuntimeError):
+            atom.check_prefix(['a', 'b', 'b'], ['a', 'a', 'b'])
+
     def test_fingerprint_ignores_forward_dates_and_entities(self):
         a=SimpleNamespace(media=None,raw_text='hello')
         b=SimpleNamespace(media=None,raw_text='hello',fwd_from='different',entities=['auto'])
